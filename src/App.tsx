@@ -125,11 +125,23 @@ function Topbar({ user, logout }: { user: User | null; logout: () => void }) {
 
 function SetupCard({ setup, onDone, notify }: any) {
   const [form, setForm] = useState({ name: "Super Admin", email: "admin@testsetu.local", password: "", setupToken: setup.devSetupToken || "" });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const submit = async (e: any) => {
     e.preventDefault();
-    await api("/setup", { method: "POST", body: form });
-    notify("Super Admin created. Please log in.");
-    onDone();
+    try {
+      setError("");
+      setSaving(true);
+      await api("/setup", { method: "POST", body: form });
+      notify("Super Admin created. Please log in.");
+      onDone();
+    } catch (err: any) {
+      const message = err.message || "Super Admin setup failed.";
+      setError(message);
+      notify(message);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <main className="authStage">
@@ -137,14 +149,15 @@ function SetupCard({ setup, onDone, notify }: any) {
         <div className="panelIntro">
           <ShieldCheck size={34} />
           <h1>Initialize TestSetu</h1>
-          <p>Create the first Super Admin. Local setup token is shown only before setup in development.</p>
+          <p>Create the first Super Admin. In production, enter the same setup token that is configured in Render.</p>
         </div>
         <form className="formGrid" onSubmit={submit}>
+          {error && <div className="formError">{error}</div>}
           <Field label="Name" value={form.name} onChange={(v: string) => setForm({ ...form, name: v })} />
           <Field label="Email" value={form.email} onChange={(v: string) => setForm({ ...form, email: v })} />
           <Field label="Password" type="password" value={form.password} onChange={(v: string) => setForm({ ...form, password: v })} />
-          <Field label="Setup token" value={form.setupToken} onChange={(v: string) => setForm({ ...form, setupToken: v })} />
-          <button className="primaryBtn"><Lock size={18} /> Create Super Admin</button>
+          <Field label="Setup token from Render" value={form.setupToken} onChange={(v: string) => setForm({ ...form, setupToken: v })} />
+          <button className="primaryBtn" disabled={saving}><Lock size={18} /> {saving ? "Creating..." : "Create Super Admin"}</button>
         </form>
       </section>
     </main>
@@ -554,8 +567,12 @@ function PublicTest({ slug, token, notify }: any) {
   const [answers, setAnswers] = useState<any>({});
   const [result, setResult] = useState<Result | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState("");
+  const [starting, setStarting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  useEffect(() => { api(`/public/tests/${slug}`, { token }).then((r) => setTest(r.test)).catch((e) => notify(e.message)); }, [slug]);
+  const [autoSubmitTried, setAutoSubmitTried] = useState(false);
+  useEffect(() => { api(`/public/tests/${slug}`, { token }).then((r) => { setTest(r.test); setError(""); }).catch((e) => { setError(e.message); notify(e.message); }); }, [slug]);
   useEffect(() => {
     if (!attempt?.due_at || step !== "test") return;
     const tick = () => setRemaining(Math.max(0, Math.round((new Date(attempt.due_at).getTime() - Date.now()) / 1000)));
@@ -563,29 +580,66 @@ function PublicTest({ slug, token, notify }: any) {
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, [attempt, step]);
-  useEffect(() => { if (remaining !== null && remaining <= 0 && step === "test" && attempt && !submitting) submit(); }, [remaining, step, attempt, submitting]);
+  useEffect(() => {
+    if (remaining !== null && remaining <= 0 && step === "test" && attempt && !submitting && !autoSubmitTried) {
+      setAutoSubmitTried(true);
+      submit(true);
+    }
+  }, [remaining, step, attempt, submitting, autoSubmitTried]);
   if (!test) return <main className="shell"><Empty title="Loading test" /></main>;
   const start = async () => {
-    const r = await api(`/public/tests/${slug}/start`, { method: "POST", token, body: { details } });
-    setAttempt(r.attempt);
-    setGuestKey(r.guestKey || "");
-    setRemaining(r.attempt.due_at ? Math.max(1, Math.round((new Date(r.attempt.due_at).getTime() - Date.now()) / 1000)) : null);
-    setStep("test");
+    if (!ready) {
+      setError("Please confirm that you are ready to start the test.");
+      return;
+    }
+    try {
+      setError("");
+      setStarting(true);
+      const r = await api(`/public/tests/${slug}/start`, { method: "POST", token, body: { details } });
+      setAttempt(r.attempt);
+      setGuestKey(r.guestKey || "");
+      setRemaining(r.attempt.due_at ? Math.max(1, Math.round((new Date(r.attempt.due_at).getTime() - Date.now()) / 1000)) : null);
+      setAutoSubmitTried(false);
+      setStep("test");
+    } catch (err: any) {
+      const message = err.message || "Test could not be started.";
+      setError(message);
+      notify(message);
+    } finally {
+      setStarting(false);
+    }
   };
   const saveAnswer = async (qid: number, value: any) => {
     const next = { ...answers, [qid]: value };
     setAnswers(next);
-    await api(`/public/attempts/${attempt.id}/answer`, { method: "POST", token, body: { questionId: qid, value, guestKey } }).catch(() => undefined);
+    try {
+      setError("");
+      const r = await api(`/public/attempts/${attempt.id}/answer`, { method: "POST", token, body: { questionId: qid, value, guestKey } });
+      if (r.result) {
+        setResult(r.result);
+        setStep("result");
+        notify("Time is over. Your test has been submitted.");
+      }
+    } catch (err: any) {
+      const message = err.message || "Answer could not be saved.";
+      setError(message);
+      notify(message);
+    }
   };
-  const submit = async () => {
+  const submit = async (auto = false) => {
     if (submitting) return;
+    if (!attempt) return;
     setSubmitting(true);
     try {
+      setError("");
       const r = await api(`/public/attempts/${attempt.id}/submit`, { method: "POST", token, body: { guestKey } });
       setResult(r.result);
       setStep("result");
+      if (auto) notify("Time is over. Your test has been submitted.");
     } catch (error: any) {
-      notify(error.message || "Submit failed.");
+      const message = error.message || "Submit failed.";
+      setError(message);
+      notify(message);
     } finally {
       setSubmitting(false);
     }
@@ -596,11 +650,12 @@ function PublicTest({ slug, token, notify }: any) {
         <div><h1>{test.title}</h1><p>{test.subject} {test.className ? `| ${test.className}` : ""}</p></div>
         {step === "test" && <div className="timer"><Timer size={18} /> {remaining === null ? "No limit" : formatTime(remaining)}</div>}
       </section>
+      {error && <div className="formError">{error}</div>}
       {step === "details" && (
         <section className="testCard">
           <h2>Student Details</h2>
           <div className="formGrid">{test.studentFields.filter((f: any) => f.mode !== "hide").map((f: any) => <Field key={f.key} label={`${f.label}${f.mode === "required" ? " *" : ""}`} value={details[f.key] || ""} onChange={(v: string) => setDetails({ ...details, [f.key]: v })} />)}</div>
-          <button className="primaryBtn" onClick={() => setStep("instructions")}>Next</button>
+          <button className="primaryBtn" onClick={() => { setError(""); setStep("instructions"); }}>Next</button>
         </section>
       )}
       {step === "instructions" && (
@@ -610,14 +665,14 @@ function PublicTest({ slug, token, notify }: any) {
           <div className="rules">
             <span>{test.questions.length} questions</span><span>{test.totalMarks} marks</span><span>{test.settings.durationMinutes} minutes</span><span>Negative marking may apply</span>
           </div>
-          <label className="checkLine"><input type="checkbox" /> <span>Are you ready to start the test? क्या आप टेस्ट शुरू करने के लिए तैयार हैं?</span></label>
-          <button className="successBtn" onClick={start}><Play size={18} /> Start Test</button>
+          <label className="checkLine"><input type="checkbox" checked={ready} onChange={(e) => setReady(e.target.checked)} /> <span>Are you ready to start the test? क्या आप टेस्ट शुरू करने के लिए तैयार हैं?</span></label>
+          <button className="successBtn" disabled={starting} onClick={start}><Play size={18} /> {starting ? "Starting..." : "Start Test"}</button>
         </section>
       )}
       {step === "test" && (
         <section className="testRun">
           <div className="questionPane">{test.questions.map((q: any, index: number) => <StudentQuestion key={q.id} q={q} index={index} value={answers[q.id]} onChange={(v: any) => saveAnswer(q.id, v)} />)}</div>
-          <aside className="palette">{test.questions.map((q: any, i: number) => <a className={answers[q.id] ? "answered" : ""} href={`#q-${q.id}`} key={q.id}>{i + 1}</a>)}<button className="dangerBtn" disabled={submitting} onClick={submit}>{submitting ? "Submitting..." : "Submit"}</button></aside>
+          <aside className="palette">{test.questions.map((q: any, i: number) => <a className={answers[q.id] ? "answered" : ""} href={`#q-${q.id}`} key={q.id}>{i + 1}</a>)}<button className="dangerBtn" disabled={submitting} onClick={() => submit()}>{submitting ? "Submitting..." : "Submit"}</button></aside>
         </section>
       )}
       {step === "result" && result && <ResultCard result={result} token={token} />}

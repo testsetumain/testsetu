@@ -333,7 +333,8 @@ async function publicRoutes(req, res, pathName, method, user) {
 async function setupSuperAdmin(req, res) {
   if ((await countSuperAdmins()) > 0) return send(res, 403, { error: "Setup is already complete." });
   const body = await readBody(req);
-  if (!setupToken || body.setupToken !== setupToken) return send(res, 403, { error: "Invalid setup token." });
+  if (!setupToken) return send(res, 500, { error: "SETUP_TOKEN is not configured on the backend." });
+  if (body.setupToken !== setupToken) return send(res, 403, { error: "Invalid setup token. Use the exact SETUP_TOKEN configured in Render." });
   validateEmail(body.email);
   validatePassword(body.password);
   const user = await insert("users", {
@@ -630,7 +631,7 @@ async function startAttempt(req, res, slug, user) {
   const b = await readBody(req);
   const test = parseTest(await col("tests").findOne({ shareSlug: slug, status: "PUBLISHED" }));
   if (!test) return send(res, 404, { error: "Test not found." });
-  ensureTestOpen(test);
+  ensureTestCanStart(test);
   if (test.accessCode && test.accessCode !== b.accessCode) return send(res, 403, { error: "Invalid access code." });
   if ((test.accessMode === "LOGIN_REQUIRED" || test.accessMode === "EXISTING_ACCOUNT_ONLY") && !user) return send(res, 401, { error: "Login is required for this test." });
   const details = validateStudentDetails(test.studentFields, b.details || {});
@@ -1150,7 +1151,7 @@ function validateStudentDetails(fields, details) {
   }
   return clean;
 }
-function ensureTestOpen(test) { const now = Date.now(); if (test.settings.availabilityStart && new Date(test.settings.availabilityStart).getTime() > now) throw statusError(400, "Test has not started yet."); if (test.settings.availabilityEnd && new Date(test.settings.availabilityEnd).getTime() < now) throw statusError(400, "Test is closed."); }
+function ensureTestCanStart(test) { const now = Date.now(); if (test.settings.availabilityStart && new Date(test.settings.availabilityStart).getTime() > now) throw statusError(400, "Test has not started yet."); if (test.settings.availabilityEnd && new Date(test.settings.availabilityEnd).getTime() < now) throw statusError(400, "Test is closed for new students."); }
 function requiresManual(q) { return ["LONG_ANSWER", "SHORT_ANSWER"].includes(q.type) && !q.correct.length; }
 function isCorrect(q, value) { const correct = q.correct.map((v) => String(v).trim().toLowerCase()); if (q.type === "MULTIPLE_CORRECT") return JSON.stringify((Array.isArray(value) ? value : []).map((v) => String(v).trim().toLowerCase()).sort()) === JSON.stringify([...correct].sort()); if (q.type === "NUMERICAL") return correct.some((c) => Math.abs(Number(c) - Number(value)) < 0.00001); return correct.includes(String(value).trim().toLowerCase()); }
 function resultVisibleNow(test) { return test.settings.resultRelease === "IMMEDIATE"; }
