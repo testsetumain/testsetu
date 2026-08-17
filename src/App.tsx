@@ -169,13 +169,25 @@ function AuthScreen({ onDone, notify }: any) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [role, setRole] = useState<"STUDENT" | "TEACHER">("TEACHER");
   const [form, setForm] = useState({ name: "", email: "", password: "", organizationName: "", subject: "", designation: "", city: "" });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const submit = async (e: any) => {
     e.preventDefault();
-    const payload = mode === "login"
-      ? await api("/auth/login", { method: "POST", body: { email: form.email, password: form.password } })
-      : await api("/auth/register", { method: "POST", body: { ...form, role } });
-    if (mode === "register" && role === "TEACHER") notify("Teacher registered. Super Admin approval is required.");
-    onDone(payload);
+    try {
+      setError("");
+      setSaving(true);
+      const payload = mode === "login"
+        ? await api("/auth/login", { method: "POST", body: { email: form.email, password: form.password } })
+        : await api("/auth/register", { method: "POST", body: { ...form, role } });
+      if (mode === "register" && role === "TEACHER") notify("Teacher registered. Super Admin approval is required.");
+      onDone(payload);
+    } catch (err: any) {
+      const message = err.message || `${mode === "login" ? "Login" : "Registration"} failed.`;
+      setError(message);
+      notify(message);
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <main className="authStage">
@@ -202,6 +214,7 @@ function AuthScreen({ onDone, notify }: any) {
           </div>
         )}
         <form className="formGrid" onSubmit={submit}>
+          {error && <div className="formError">{error}</div>}
           {mode === "register" && <Field label="Name" value={form.name} onChange={(v: string) => setForm({ ...form, name: v })} />}
           <Field label="Email" value={form.email} onChange={(v: string) => setForm({ ...form, email: v })} />
           <Field label="Password" type="password" value={form.password} onChange={(v: string) => setForm({ ...form, password: v })} />
@@ -213,7 +226,7 @@ function AuthScreen({ onDone, notify }: any) {
               <Field label="City" value={form.city} onChange={(v: string) => setForm({ ...form, city: v })} />
             </>
           )}
-          <button className="primaryBtn"><UserCheck size={18} /> {mode === "login" ? "Login" : "Create Account"}</button>
+          <button className="primaryBtn" disabled={saving}><UserCheck size={18} /> {saving ? "Please wait..." : mode === "login" ? "Login" : "Create Account"}</button>
         </form>
       </section>
     </main>

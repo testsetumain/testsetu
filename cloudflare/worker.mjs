@@ -34,12 +34,18 @@ async function proxyToNodeOrigin(request, env, incomingUrl) {
   headers.set("x-forwarded-proto", incomingUrl.protocol.replace(":", ""));
   headers.set("x-testsetu-edge", "cloudflare");
 
-  return fetch(new Request(target, {
+  const response = await fetch(new Request(target, {
     method: request.method,
     headers,
     body: request.body,
     redirect: "manual"
   }));
+
+  if (response.status === 404 && response.headers.get("x-render-routing") === "no-server") {
+    return json({ error: "Render backend service was not found. Check Cloudflare BACKEND_ORIGIN." }, 502);
+  }
+
+  return response;
 }
 
 function json(payload, status) {
