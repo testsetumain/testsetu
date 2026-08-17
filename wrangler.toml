@@ -6,7 +6,7 @@ compatibility_date = "2026-08-17"
 [assets]
 directory = "./dist"
 binding = "ASSETS"
-run_worker_first = [ "/api/*", "/uploads/*", "/*" ]
+run_worker_first = [ "/*" ]
 
 [vars]
 # Render-hosted Node.js TestSetu API. No file/object storage binding is used.
