@@ -17,6 +17,7 @@ import {
   Play,
   Plus,
   QrCode,
+  RotateCcw,
   Search,
   Send,
   Settings,
@@ -349,12 +350,21 @@ function TeacherDashboard({ token, user, notify }: any) {
   const [objections, setObjections] = useState<any[]>([]);
   const [selectedResults, setSelectedResults] = useState<any>(null);
   const [publishingId, setPublishingId] = useState<number | null>(null);
+  const [editingTest, setEditingTest] = useState<any>(null);
+  const [loadError, setLoadError] = useState("");
   const load = async () => {
-    setDashboard(await api("/teacher/dashboard", { token }));
-    setQuestions((await api("/teacher/questions", { token })).questions);
-    setTests((await api("/teacher/tests", { token })).tests);
-    setStudents(await api("/teacher/students", { token }));
-    setObjections((await api("/teacher/objections", { token })).objections);
+    try {
+      setDashboard(await api("/teacher/dashboard", { token }));
+      setQuestions((await api("/teacher/questions", { token })).questions);
+      setTests((await api("/teacher/tests", { token })).tests);
+      setStudents(await api("/teacher/students", { token }));
+      setObjections((await api("/teacher/objections", { token })).objections);
+      setLoadError("");
+    } catch (error: any) {
+      const message = error.message || "Dashboard data load failed.";
+      setLoadError(message);
+      notify(message);
+    }
   };
   useEffect(() => { load(); }, []);
   const publish = async (id: number) => {
@@ -376,6 +386,26 @@ function TeacherDashboard({ token, user, notify }: any) {
     setSelectedResults(null);
     notify("Test and related data deleted.");
   };
+  const editTest = async (id: number) => {
+    try {
+      const r = await api(`/teacher/tests/${id}`, { token });
+      setEditingTest(r.test);
+      setTab("builder");
+    } catch (error: any) {
+      notify(error.message || "Unable to open test for editing.");
+    }
+  };
+  const reExam = async (id: number) => {
+    try {
+      const r = await api(`/teacher/tests/${id}/duplicate`, { method: "POST", token });
+      await load();
+      setEditingTest(r.test);
+      setTab("builder");
+      notify("Re-exam draft created. Review and publish it.");
+    } catch (error: any) {
+      notify(error.message || "Re-exam draft failed.");
+    }
+  };
   const loadResults = async (id: number) => setSelectedResults(await api(`/teacher/tests/${id}/results`, { token }));
   const nav = [
     ["overview", LayoutDashboard],
@@ -390,6 +420,7 @@ function TeacherDashboard({ token, user, notify }: any) {
   return (
     <DashboardFrame title={`Namaste, ${user.name}`} subtitle="Create Test -> Questions -> Settings -> Preview -> Publish" icon={<BookOpen />}>
       <div className="tabs">{nav.map(([name, Icon]: any) => <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}><Icon size={17} /> {name}</button>)}</div>
+      {loadError && <div className="formError">{loadError}</div>}
       {tab === "overview" && (
         <>
           <StatsGrid stats={[
@@ -400,12 +431,12 @@ function TeacherDashboard({ token, user, notify }: any) {
             ["Certificates", dashboard.stats?.certificates, "purple", <Award />],
             ["Objections", dashboard.stats?.objections, "red", <Bell />]
           ]} />
-          <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} deleteTest={deleteTest} /></Section>
+          <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
         </>
       )}
-      {tab === "builder" && <TestBuilder token={token} questions={questions} onSaved={() => { notify("Test saved."); load(); }} />}
+      {tab === "builder" && <TestBuilder token={token} questions={questions} editingTest={editingTest} onCancelEdit={() => setEditingTest(null)} onSaved={() => { notify(editingTest ? "Test updated." : "Test saved."); setEditingTest(null); load(); }} />}
       {tab === "questions" && <QuestionBank token={token} questions={questions} onSaved={() => { notify("Question saved."); load(); }} />}
-      {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} deleteTest={deleteTest} /></Section>}
+      {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
       {tab === "students" && <StudentManager token={token} data={students} onRefresh={load} notify={notify} />}
       {tab === "results" && <ResultsPanel data={selectedResults} tests={tests} loadResults={loadResults} token={token} />}
       {tab === "objections" && <ObjectionPanel token={token} objections={objections} onRefresh={load} notify={notify} />}
@@ -415,7 +446,10 @@ function TeacherDashboard({ token, user, notify }: any) {
 }
 
 function QuestionBank({ token, questions, onSaved }: any) {
-  const [form, setForm] = useState<any>({ type: "MCQ", text: "", options: ["", "", "", ""], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", chapter: "", difficulty: "Medium", explanation: "", tags: "" });
+  const emptyQuestion = () => ({ type: "MCQ", text: "", options: ["", "", "", ""], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", chapter: "", difficulty: "Medium", explanation: "", tags: "", allowOther: false });
+  const objectiveTypes = ["MCQ", "TRUE_FALSE", "ASSERTION_REASON", "IMAGE_BASED", "PASSAGE_BASED"];
+  const optionTypes = [...objectiveTypes, "MULTIPLE_CORRECT"];
+  const [form, setForm] = useState<any>(emptyQuestion());
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const visible = questions.filter((q: any) => `${q.text} ${q.subject} ${q.topic}`.toLowerCase().includes(query.toLowerCase()));
@@ -423,6 +457,12 @@ function QuestionBank({ token, questions, onSaved }: any) {
     const options = [...form.options];
     options[i] = v;
     setForm({ ...form, options });
+  };
+  const addOption = () => setForm({ ...form, options: [...(form.options || []), ""] });
+  const removeOption = (i: number) => {
+    const removed = form.options[i];
+    const options = form.options.filter((_: string, index: number) => index !== i);
+    setForm({ ...form, options: options.length ? options : [""], correct: (form.correct || []).filter((x: string) => x !== removed) });
   };
   const upload = async (file: File) => {
     const dataUrl = await fileToDataUrl(file);
@@ -435,7 +475,7 @@ function QuestionBank({ token, questions, onSaved }: any) {
     if (editingId) await api(`/teacher/questions/${editingId}`, { method: "PUT", token, body });
     else await api("/teacher/questions", { method: "POST", token, body });
     setEditingId(null);
-    setForm({ type: "MCQ", text: "", options: ["", "", "", ""], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", chapter: "", difficulty: "Medium", explanation: "", tags: "" });
+    setForm(emptyQuestion());
     onSaved();
   };
   const editQuestion = (q: any) => {
@@ -453,12 +493,13 @@ function QuestionBank({ token, questions, onSaved }: any) {
       chapter: q.chapter || "",
       difficulty: q.difficulty || "Medium",
       explanation: q.explanation || "",
-      tags: Array.isArray(q.tags) ? q.tags.join(", ") : q.tags || ""
+      tags: Array.isArray(q.tags) ? q.tags.join(", ") : q.tags || "",
+      allowOther: !!q.allowOther
     });
   };
   const cancelEdit = () => {
     setEditingId(null);
-    setForm({ type: "MCQ", text: "", options: ["", "", "", ""], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", chapter: "", difficulty: "Medium", explanation: "", tags: "" });
+    setForm(emptyQuestion());
   };
   return (
     <div className="twoCol">
@@ -476,10 +517,25 @@ function QuestionBank({ token, questions, onSaved }: any) {
               </>
             )}
           </div>
-          {["MCQ", "MULTIPLE_CORRECT", "TRUE_FALSE", "ASSERTION_REASON", "IMAGE_BASED", "PASSAGE_BASED"].includes(form.type) && form.options.map((op: string, i: number) => (
-            <Field key={i} label={`Option ${i + 1}`} value={op} onChange={(v: string) => setOption(i, v)} />
-          ))}
-          <Field label="Correct answer(s), comma separated" value={Array.isArray(form.correct) ? form.correct.join(",") : form.correct} onChange={(v: string) => setForm({ ...form, correct: v.split(",").map((x) => x.trim()).filter(Boolean) })} />
+          {optionTypes.includes(form.type) && (
+            <div className="optionEditor">
+              {(form.options || []).map((op: string, i: number) => (
+                <div className="inlineFields" key={i}>
+                  <Field label={`Option ${i + 1}`} value={op} onChange={(v: string) => setOption(i, v)} />
+                  <button type="button" className="iconBtn" onClick={() => removeOption(i)} title="Remove option"><Trash2 size={16} /></button>
+                </div>
+              ))}
+              <button type="button" className="secondaryBtn" onClick={addOption}><Plus size={16} /> Add option</button>
+              {objectiveTypes.includes(form.type) && <Toggle label="Allow Other answer textbox" value={form.allowOther} onChange={(v: boolean) => setForm({ ...form, allowOther: v })} />}
+            </div>
+          )}
+          {objectiveTypes.includes(form.type) && (
+            <Select label="Correct option" value={form.correct?.[0] || ""} onChange={(v: string) => setForm({ ...form, correct: v ? [v] : [] })} options={["", ...(form.options || []).filter(Boolean)]} />
+          )}
+          {form.type === "MULTIPLE_CORRECT" && (
+            <div className="fieldRules">{(form.options || []).filter(Boolean).map((op: string) => <Toggle key={op} label={op} value={(form.correct || []).includes(op)} onChange={(checked: boolean) => setForm({ ...form, correct: checked ? [...(form.correct || []), op] : (form.correct || []).filter((x: string) => x !== op) })} />)}</div>
+          )}
+          {!optionTypes.includes(form.type) && <Field label="Correct answer(s), comma separated" value={Array.isArray(form.correct) ? form.correct.join(",") : form.correct} onChange={(v: string) => setForm({ ...form, correct: v.split(",").map((x) => x.trim()).filter(Boolean) })} />}
           <div className="inlineFields">
             <Field label="Marks" type="number" value={form.marks} onChange={(v: string) => setForm({ ...form, marks: Number(v) })} />
             <Field label="Negative" type="number" value={form.negativeMarks} onChange={(v: string) => setForm({ ...form, negativeMarks: Number(v) })} />
@@ -499,14 +555,14 @@ function QuestionBank({ token, questions, onSaved }: any) {
   );
 }
 
-function TestBuilder({ token, questions, onSaved }: any) {
+function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit }: any) {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [form, setForm] = useState<any>({
+  const defaultTestForm = () => ({
     title: "", subject: "", className: "", description: "", passingMarks: 0, accessMode: "GUEST_ALLOWED", accessCode: "",
     questionIds: [], instructionsEn: "Read every question carefully. Confirm when you are ready to start.", instructionsHi: "हर प्रश्न ध्यान से पढ़ें। तैयार होने पर टेस्ट शुरू करें।",
-    settings: { durationMinutes: 45, maxAttempts: 1, rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], resultRelease: "IMMEDIATE", certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33 }, answerReview: { enabled: true, showCorrect: true, showExplanation: true } },
+    settings: { durationMinutes: 45, maxAttempts: 1, rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], resultRelease: "IMMEDIATE", certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, template: { style: "DigiCoders", color: "#c79a2b", issuerName: "TestSetu", headline: "Certificate of Achievement" } }, answerReview: { enabled: true, showCorrect: true, showExplanation: true } },
     studentFields: [
       { key: "fullName", label: "Full Name", mode: "required" },
       { key: "rollNumber", label: "Roll Number", mode: "optional" },
@@ -514,14 +570,34 @@ function TestBuilder({ token, questions, onSaved }: any) {
       { key: "section", label: "Section", mode: "optional" }
     ]
   });
-  useEffect(() => localStorage.setItem("testsetu_builder_draft", JSON.stringify(form)), [form]);
+  const [form, setForm] = useState<any>(defaultTestForm());
+  useEffect(() => {
+    if (!editingTest) return;
+    const base = defaultTestForm();
+    setForm({
+      ...base,
+      ...editingTest,
+      questionIds: editingTest.questionIds || editingTest.questions?.map((q: any) => q.id) || [],
+      settings: {
+        ...base.settings,
+        ...(editingTest.settings || {}),
+        certificate: { ...base.settings.certificate, ...(editingTest.settings?.certificate || {}), template: { ...base.settings.certificate.template, ...(editingTest.settings?.certificate?.template || {}) } },
+        answerReview: { ...base.settings.answerReview, ...(editingTest.settings?.answerReview || {}) }
+      },
+      studentFields: editingTest.studentFields || base.studentFields
+    });
+    setStep(1);
+  }, [editingTest?.id]);
+  useEffect(() => { if (!editingTest) localStorage.setItem("testsetu_builder_draft", JSON.stringify(form)); }, [form, editingTest]);
   const totalMarks = questions.filter((q: any) => form.questionIds.includes(q.id)).reduce((s: number, q: any) => s + Number(q.marks), 0);
   const save = async (publish = false) => {
     try {
       setError("");
       setSaving(true);
       if (publish && form.questionIds.length === 0) throw new Error("Publish karne se pehle at least one question select karein.");
-      const saved = await api("/teacher/tests", { method: "POST", token, body: { ...form, totalMarks, status: publish ? "PUBLISHED" : "DRAFT" } });
+      const path = editingTest ? `/teacher/tests/${editingTest.id}` : "/teacher/tests";
+      const method = editingTest ? "PUT" : "POST";
+      const saved = await api(path, { method, token, body: { ...form, totalMarks, status: publish ? "PUBLISHED" : (editingTest?.status || "DRAFT") } });
       if (publish) await api(`/teacher/tests/${saved.test.id}/publish`, { method: "POST", token });
       onSaved();
     } catch (err: any) {
@@ -537,7 +613,7 @@ function TestBuilder({ token, questions, onSaved }: any) {
     setForm({ ...form, studentFields });
   };
   return (
-    <Section title="Step-by-step Test Builder" action={<span className="pill">Step {step}/10</span>}>
+    <Section title={editingTest ? `Edit Test: ${editingTest.title}` : "Step-by-step Test Builder"} action={<span className="pill">Step {step}/10</span>}>
       <div className="builderSteps">{["Basic", "Questions", "Timing", "Student Details", "Instructions", "Result", "Certificate", "Design", "Preview", "Publish"].map((s, i) => <button className={step === i + 1 ? "active" : ""} onClick={() => setStep(i + 1)} key={s}>{s}</button>)}</div>
       {error && <div className="formError">{error}</div>}
       {step === 1 && <div className="formGrid"><Field label="Test name" value={form.title} onChange={(v: string) => setForm({ ...form, title: v })} /><Field label="Subject" value={form.subject} onChange={(v: string) => setForm({ ...form, subject: v })} /><Field label="Class" value={form.className} onChange={(v: string) => setForm({ ...form, className: v })} /><TextArea label="Description" value={form.description} onChange={(v: string) => setForm({ ...form, description: v })} /></div>}
@@ -547,10 +623,12 @@ function TestBuilder({ token, questions, onSaved }: any) {
       {step === 5 && <div className="formGrid"><TextArea label="English instructions" value={form.instructionsEn} onChange={(v: string) => setForm({ ...form, instructionsEn: v })} /><TextArea label="Hindi instructions" value={form.instructionsHi} onChange={(v: string) => setForm({ ...form, instructionsHi: v })} /></div>}
       {step === 6 && <div className="formGrid"><Select label="Result release" value={form.settings.resultRelease} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, resultRelease: v } })} options={["IMMEDIATE", "AFTER_TEST_END", "AFTER_TEACHER_PUBLISHES", "NEVER"]} /><Field label="Passing marks" type="number" value={form.passingMarks} onChange={(v: string) => setForm({ ...form, passingMarks: Number(v) })} /><Toggle label="Ranking enabled" value={form.settings.rankingEnabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, rankingEnabled: v } })} /></div>}
       {step === 7 && <div className="formGrid"><Toggle label="Certificates enabled" value={form.settings.certificate.enabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, enabled: v } } })} /><Select label="Eligibility" value={form.settings.certificate.eligibility} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, eligibility: v } } })} options={["EVERYONE", "PASSED", "MIN_PERCENTAGE", "TOP_STUDENTS", "MANUAL_APPROVAL"]} /></div>}
-      {step >= 8 && <PreviewCard form={form} totalMarks={totalMarks} questions={questions.filter((q: any) => form.questionIds.includes(q.id))} />}
+      {step === 8 && <CertificateDesignEditor form={form} setForm={setForm} totalMarks={totalMarks} />}
+      {step >= 9 && <PreviewCard form={form} totalMarks={totalMarks} questions={questions.filter((q: any) => form.questionIds.includes(q.id))} />}
       <div className="builderActions">
         <button className="secondaryBtn" disabled={step === 1} onClick={() => setStep(step - 1)}>Previous</button>
         <button className="secondaryBtn" disabled={step === 10} onClick={() => setStep(step + 1)}>Next</button>
+        {editingTest && <button className="secondaryBtn" onClick={onCancelEdit}>Cancel Edit</button>}
         <button className="primaryBtn" disabled={saving} onClick={() => save(false)}>{saving ? "Saving..." : "Save Draft"}</button>
         <button className="successBtn" disabled={saving} onClick={() => save(true)}>{saving ? "Publishing..." : "Publish"}</button>
       </div>
@@ -681,12 +759,23 @@ function PublicTest({ slug, token, notify }: any) {
 }
 
 function StudentQuestion({ q, index, value, onChange }: any) {
+  const singleChoiceTypes = ["MCQ", "TRUE_FALSE", "IMAGE_BASED", "PASSAGE_BASED", "ASSERTION_REASON"];
+  const otherActive = value?.option === "__OTHER__";
   return (
     <article className="studentQuestion" id={`q-${q.id}`}>
       <div className="qTop"><span>Question {index + 1}</span><b>{q.marks} marks</b></div>
       <h3>{q.text}</h3>
       {q.imageUrl && <img className="questionImage" src={assetUrl(q.imageUrl)} alt="" />}
-      {["MCQ", "TRUE_FALSE", "IMAGE_BASED", "PASSAGE_BASED", "ASSERTION_REASON"].includes(q.type) && <div className="optionStack">{q.options.map((op: string) => <label key={op} className={value === op ? "option active" : "option"}><input type="radio" checked={value === op} onChange={() => onChange(op)} />{op}</label>)}</div>}
+      {singleChoiceTypes.includes(q.type) && <div className="optionStack">
+        {q.options.map((op: string) => <label key={op} className={value === op ? "option active" : "option"}><input type="radio" checked={value === op} onChange={() => onChange(op)} />{op}</label>)}
+        {q.allowOther && (
+          <label className={otherActive ? "option active otherOption" : "option otherOption"}>
+            <input type="radio" checked={otherActive} onChange={() => onChange({ option: "__OTHER__", text: "" })} />
+            <span>Other</span>
+            {otherActive && <input value={value?.text || ""} onChange={(e) => onChange({ option: "__OTHER__", text: e.target.value })} placeholder="Type your answer" />}
+          </label>
+        )}
+      </div>}
       {q.type === "MULTIPLE_CORRECT" && <div className="optionStack">{q.options.map((op: string) => <label key={op} className={(value || []).includes(op) ? "option active" : "option"}><input type="checkbox" checked={(value || []).includes(op)} onChange={(e) => onChange(e.target.checked ? [...(value || []), op] : (value || []).filter((x: string) => x !== op))} />{op}</label>)}</div>}
       {!["MCQ", "TRUE_FALSE", "IMAGE_BASED", "PASSAGE_BASED", "ASSERTION_REASON", "MULTIPLE_CORRECT"].includes(q.type) && <textarea value={value || ""} onChange={(e) => onChange(e.target.value)} placeholder="Type your answer" />}
       <button className="secondaryBtn" onClick={() => onChange("")}>Clear answer</button>
@@ -742,15 +831,10 @@ function CertificateViewer({ resultId, token, notify }: any) {
   }, [resultId, token]);
   return (
     <main className="authStage single">
-      <section className="certificate">
-        <Award size={46} />
-        <h1>Certificate</h1>
+      <section className="certificateView">
         {data ? (
           <>
-            <p className="certName">{data.student_name}</p>
-            <p>{data.test_title || data.title || "Completed Test"}</p>
-            <b>{data.certificate_id}</b>
-            {qr && <img src={qr} alt="Verification QR" />}
+            <ProfessionalCertificate certificate={data} qr={qr} />
             <div className="rowActions centeredActions">
               <button className="primaryBtn" onClick={() => downloadFile(`/public/certificates/${resultId}/pdf`, `certificate-${data.certificate_id}.pdf`, token)}><FileDown size={16} /> Download PDF</button>
               <a className="secondaryBtn" href={`#verify/${data.certificate_id}`}>Verify</a>
@@ -784,16 +868,15 @@ function VerifyCertificate({ id }: any) {
     api(`/public/verify/${id}/qr`).then((r) => setQr(r.dataUrl)).catch(() => undefined);
   }, [id]);
   return (
-    <main className="authStage">
-      <section className="certificate">
-        {data?.valid ? <CheckCircle2 size={46} /> : <Award size={46} />}
-        <h1>{data?.valid ? "Certificate Verified" : "Certificate Not Found"}</h1>
+    <main className="verifyStage">
+      <section className="certificateView">
+        <div className="verifyHead">
+          {data?.valid ? <CheckCircle2 size={34} /> : <Award size={34} />}
+          <h1>{data?.valid ? "Certificate Verified" : "Certificate Not Found"}</h1>
+        </div>
         {data?.valid ? (
           <>
-            <p className="certName">{data.certificate.student_name}</p>
-            <p>{data.certificate.test_title}</p>
-            <p>{data.certificate.teacher_name} {data.certificate.organization_name ? `| ${data.certificate.organization_name}` : ""}</p>
-            <b>{data.certificate.certificate_id}</b>
+            <ProfessionalCertificate certificate={data.certificate} qr={qr} />
             <div className="resultFacts">
               <span>Score {data.certificate.score}/{data.certificate.total_marks}</span>
               <span>{data.certificate.percentage}%</span>
@@ -816,7 +899,7 @@ function VerifyCertificate({ id }: any) {
               <p><b>Accuracy</b>{data.certificate.result?.accuracy != null ? `${data.certificate.result.accuracy}%` : "-"}</p>
               {Object.entries(data.certificate.student_details || {}).map(([key, value]: any) => <p key={key}><b>{key}</b>{String(value || "-")}</p>)}
             </div>
-            {qr && <img src={qr} alt="Verification QR" />}
+            <AnswerReviewTable rows={data.certificate.answer_review || []} />
           </>
         ) : <p>{data?.error || "Checking certificate..."}</p>}
       </section>
@@ -872,13 +955,14 @@ function TeacherSettings() {
   );
 }
 
-function TestCards({ tests, publish, results, publishingId, deleteTest }: any) {
+function TestCards({ tests, publish, results, publishingId, deleteTest, editTest, reExam }: any) {
   if (!tests?.length) return <Empty title="No tests yet" />;
   return (
     <div className="cardGrid">
       {tests.map((t: any) => {
         const isPublished = t.status === "PUBLISHED";
         const isPublishing = publishingId === t.id;
+        const life = testLifecycle(t);
         return (
           <div className="testCardSmall" key={t.id}>
             <div className="testCardTitle">
@@ -886,14 +970,20 @@ function TestCards({ tests, publish, results, publishingId, deleteTest }: any) {
               <p>{t.subject || "General"} | {t.totalMarks} marks</p>
             </div>
             <span className={`status ${String(t.status).toLowerCase()}`}>{t.status}</span>
+            <div className="testMetaLine">
+              <span className={`status ${life.tone}`}>{life.label}</span>
+              <span><Timer size={14} /> {life.time}</span>
+            </div>
             <div className="shareLine">
               <code title={`${location.origin}/#test/${t.shareSlug}`}>{location.origin}/#test/{t.shareSlug}</code>
               <button className="iconBtn" onClick={() => navigator.clipboard.writeText(`${location.origin}/#test/${t.shareSlug}`)} title="Copy"><Copy size={16} /></button>
             </div>
             <div className="rowActions cardActions">
+              {editTest && <button className="secondaryBtn" onClick={() => editTest(t.id)}><Pencil size={16} /> Edit</button>}
               <a className="secondaryBtn" href={`#test/${t.shareSlug}`}>Preview</a>
               <button className="successBtn" disabled={isPublished || isPublishing} onClick={() => publish(t.id)}>{isPublishing ? "Publishing..." : isPublished ? "Published" : "Publish"}</button>
               <button className="secondaryBtn" onClick={() => results(t.id)}>Results</button>
+              {reExam && <button className="secondaryBtn" onClick={() => reExam(t.id)}><RotateCcw size={16} /> Re-exam</button>}
               {deleteTest && <button className="dangerBtn" onClick={() => deleteTest(t.id)}>Delete</button>}
             </div>
           </div>
@@ -954,8 +1044,95 @@ function AnswerReview({ result }: any) {
   );
 }
 
+function AnswerReviewTable({ rows }: any) {
+  if (!rows?.length) return <Empty title="Answer details are not available yet" />;
+  return (
+    <div className="answerReview verifyAnswerReview">
+      <h3>Question-wise Scorecard</h3>
+      {rows.map((item: any) => (
+        <article key={`${item.questionId}-${item.number}`} className="reviewItem">
+          <div className="qTop"><span>Question {item.number}</span><b>{item.awarded}/{item.marks}</b></div>
+          <p>{item.questionText}</p>
+          <div className="reviewGrid">
+            <span><b>Student answer</b>{formatAnswer(item.studentAnswer)}</span>
+            <span><b>Correct answer</b>{formatAnswer(item.correctAnswer)}</span>
+            <span><b>Status</b>{item.status}</span>
+          </div>
+          {item.explanation && <small>{item.explanation}</small>}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 function PreviewCard({ form, totalMarks, questions }: any) {
   return <div className="previewCard"><h2>{form.title || "Untitled Test"}</h2><p>{form.subject} | {totalMarks} marks | {form.settings.durationMinutes} minutes</p><p>{questions.length} questions selected. Result release: {form.settings.resultRelease}. Ranking: {form.settings.rankingEnabled ? "On" : "Off"}.</p></div>;
+}
+
+function CertificateDesignEditor({ form, setForm, totalMarks }: any) {
+  const template = form.settings.certificate.template || {};
+  const setTemplate = (patch: any) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, template: { ...template, ...patch } } } });
+  const preview = {
+    certificate_id: "TS-PREVIEW",
+    student_name: "Abhinav Yadav",
+    test_title: form.title || "Sample Test",
+    subject: form.subject || "Course",
+    className: form.className || "Batch",
+    issued_at: new Date().toISOString(),
+    teacher_name: template.issuerName || "TestSetu",
+    organization_name: template.organization || "Verified Online Assessment",
+    score: totalMarks || 95,
+    total_marks: totalMarks || 100,
+    percentage: totalMarks ? 100 : 95,
+    grade: "A+",
+    passed: true,
+    rank_label: "Rank 1",
+    test: { durationMinutes: form.settings.durationMinutes, passingMarks: form.passingMarks, totalMarks: totalMarks || 100 },
+    result: { correct: 18, wrong: 1, unattempted: 1, accuracy: 95 },
+    student_details: { rollNumber: "TSU-001", className: form.className || "Batch" }
+  };
+  return (
+    <div className="certificateDesignGrid">
+      <div className="formGrid">
+        <Select label="Certificate style" value={template.style || "DigiCoders"} onChange={(v: string) => setTemplate({ style: v })} options={["DigiCoders", "Marksheet", "Classic"]} />
+        <Field label="Certificate headline" value={template.headline || "Certificate of Achievement"} onChange={(v: string) => setTemplate({ headline: v })} />
+        <Field label="Issuer / institute name" value={template.issuerName || "TestSetu"} onChange={(v: string) => setTemplate({ issuerName: v })} />
+        <Field label="Organization tagline" value={template.organization || "Verified Online Assessment"} onChange={(v: string) => setTemplate({ organization: v })} />
+        <Field label="Accent color" type="color" value={template.color || "#c79a2b"} onChange={(v: string) => setTemplate({ color: v })} />
+      </div>
+      <ProfessionalCertificate certificate={preview} qr="" compact />
+    </div>
+  );
+}
+
+function ProfessionalCertificate({ certificate, qr, compact = false }: any) {
+  const template = certificate.template || certificate.test?.settings?.certificate?.template || {};
+  const color = template.color || "#c79a2b";
+  return (
+    <article className={compact ? "proCertificate compact" : "proCertificate"} style={{ "--cert-accent": color } as any}>
+      <div className="certCorner tl" /><div className="certCorner tr" /><div className="certCorner bl" /><div className="certCorner br" />
+      <header>
+        <b>{template.issuerName || certificate.organization_name || certificate.teacher_name || "TestSetu"}</b>
+        <span>{template.organization || certificate.organization_name || "Verified Online Assessment"}</span>
+      </header>
+      <h2>{template.headline || "Certificate of Achievement"}</h2>
+      <p>This certificate is proudly presented to</p>
+      <h1>{certificate.student_name || "Student"}</h1>
+      <p>for successfully completing</p>
+      <h3>{certificate.test_title || certificate.title || "Completed Test"}</h3>
+      <div className="certScoreBand">
+        <span>Score <b>{certificate.score}/{certificate.total_marks}</b></span>
+        <span>Percentage <b>{certificate.percentage}%</b></span>
+        <span>Grade <b>{certificate.grade || "-"}</b></span>
+        <span>{certificate.rank_label || (certificate.passed ? "Passed" : "Completed")}</span>
+      </div>
+      <footer>
+        <span>Certificate ID<br /><b>{certificate.certificate_id}</b></span>
+        {qr ? <img src={qr} alt="Verification QR" /> : <QrCode size={58} />}
+        <span>Issued<br /><b>{certificate.issued_at ? formatDateTime(certificate.issued_at) : "-"}</b></span>
+      </footer>
+    </article>
+  );
 }
 
 function DashboardFrame({ title, subtitle, icon, children }: any) {
@@ -1014,8 +1191,15 @@ async function api(path: string, opts: any = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!response.ok) throw new Error(data.error || "Request failed");
+  let data: any = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text.trim() || `HTTP ${response.status}` };
+    }
+  }
+  if (!response.ok) throw new Error(data.error || data.message || `Request failed (${response.status})`);
   return data;
 }
 
@@ -1066,6 +1250,17 @@ function formatTime(seconds: number) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function testLifecycle(test: any) {
+  if (test.status !== "PUBLISHED") return { label: "Draft", tone: "draft", time: "Not live" };
+  const now = Date.now();
+  const start = test.settings?.availabilityStart ? new Date(test.settings.availabilityStart).getTime() : null;
+  const end = test.settings?.availabilityEnd ? new Date(test.settings.availabilityEnd).getTime() : null;
+  if (start && start > now) return { label: "Upcoming", tone: "draft", time: `Starts ${formatDateTime(test.settings.availabilityStart)}` };
+  if (end && end <= now) return { label: "Complete", tone: "stopped", time: "Closed for new students" };
+  if (end) return { label: "Running", tone: "published", time: `${formatTime(Math.max(0, Math.round((end - now) / 1000)))} left to join` };
+  return { label: "Running", tone: "published", time: "Open" };
+}
+
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
@@ -1075,6 +1270,7 @@ function safeJson(text: string, fallback: any) {
 }
 
 function formatAnswer(value: any) {
+  if (value && typeof value === "object" && value.option === "__OTHER__") return `Other: ${value.text || ""}`;
   if (Array.isArray(value)) return value.join(", ");
   return String(value ?? "Not answered");
 }

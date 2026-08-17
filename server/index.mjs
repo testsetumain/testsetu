@@ -894,7 +894,7 @@ async function certificatePdf(res, resultId, user) {
   if (!canSeeDetailedResult(result, user)) return send(res, 423, { error: "Certificate PDF will be available after the test ends." });
   const cert = await maybeIssueCertificate(result) || await getCertificateForResult(result.id);
   if (!cert) return send(res, 404, { error: "Certificate is not available for this result." });
-  sendPdf(res, simplePdf("TestSetu Certificate of Achievement", [`This certifies that ${cert.studentName}`, `has completed ${result.testTitle}`, `Marks: ${result.score} / ${result.totalMarks}`, `Percentage: ${result.percentage}%`, `Grade: ${result.grade}`, `Rank: ${result.rankLabel || "Not ranked"}`, `Certificate ID: ${cert.certificateId}`, `Issued: ${cert.issuedAt}`, `Verify: ${APP_URL}/#verify/${encodeURIComponent(cert.certificateId)}`]), `certificate-${cert.certificateId}.pdf`);
+  sendPdf(res, certificatePdfBuffer(cert, result), `certificate-${cert.certificateId}.pdf`);
 }
 
 async function verifyCertificate(res, certId) {
@@ -1020,6 +1020,19 @@ async function hydrateCertificate(cert) {
   const profile = test ? await col("teacherProfiles").findOne({ userId: test.teacherId }) : null;
   const result = cert.resultId ? await getResult(cert.resultId) : null;
   const attempt = result?.attemptId ? await getById("attempts", result.attemptId) : null;
+  const answerReview = (result?.breakdown?.questions || []).map((item, index) => ({
+    number: index + 1,
+    questionId: item.questionId,
+    questionText: item.questionText,
+    studentAnswer: item.value,
+    correctAnswer: item.correctAnswer,
+    marks: item.marks,
+    awarded: item.awarded,
+    status: item.status,
+    explanation: item.explanation || "",
+    subject: item.subject || "",
+    topic: item.topic || ""
+  }));
   return {
     ...toPublic(cert),
     certificate_id: cert.certificateId,
@@ -1068,6 +1081,7 @@ async function hydrateCertificate(cert) {
       unattempted: result.unattempted,
       accuracy: result.accuracy
     } : null,
+    answer_review: answerReview,
     verificationUrl: `${APP_URL}/#verify/${encodeURIComponent(cert.certificateId)}`
   };
 }
@@ -1115,7 +1129,7 @@ async function hydrateResultRow(row) {
 
 function parseQuestion(q) {
   if (!q) return null;
-  return { ...toPublic(q), imageUrl: q.imageUrl || q.image_url, negativeMarks: Number(q.negativeMarks || 0), options: q.options || [], correct: q.correct || [], tags: q.tags || [], favorite: !!q.favorite, archived: !!q.archived };
+  return { ...toPublic(q), imageUrl: q.imageUrl || q.image_url, negativeMarks: Number(q.negativeMarks || 0), options: q.options || [], correct: q.correct || [], tags: q.tags || [], favorite: !!q.favorite, allowOther: !!q.allowOther, archived: !!q.archived };
 }
 
 function parseTest(t) {
@@ -1125,7 +1139,7 @@ function parseTest(t) {
 
 function normalizeQuestion(b) {
   if (!b.text || String(b.text).trim().length < 3) throw statusError(400, "Question text is required.");
-  return { type: b.type || "MCQ", text: String(b.text).trim(), imageUrl: b.imageUrl || "", options: Array.isArray(b.options) ? b.options.filter(Boolean) : [], correct: Array.isArray(b.correct) ? b.correct : [b.correct].filter(Boolean), marks: Number(b.marks || 1), negativeMarks: Number(b.negativeMarks || 0), explanation: b.explanation || "", subject: b.subject || "", chapter: b.chapter || "", topic: b.topic || "", difficulty: b.difficulty || "Medium", tags: Array.isArray(b.tags) ? b.tags : String(b.tags || "").split(",").map((x) => x.trim()).filter(Boolean), favorite: !!b.favorite };
+  return { type: b.type || "MCQ", text: String(b.text).trim(), imageUrl: b.imageUrl || "", options: Array.isArray(b.options) ? b.options.filter(Boolean) : [], correct: Array.isArray(b.correct) ? b.correct : [b.correct].filter(Boolean), marks: Number(b.marks || 1), negativeMarks: Number(b.negativeMarks || 0), explanation: b.explanation || "", subject: b.subject || "", chapter: b.chapter || "", topic: b.topic || "", difficulty: b.difficulty || "Medium", tags: Array.isArray(b.tags) ? b.tags : String(b.tags || "").split(",").map((x) => x.trim()).filter(Boolean), favorite: !!b.favorite, allowOther: !!b.allowOther };
 }
 
 function normalizeTest(b) {
@@ -1135,7 +1149,7 @@ function normalizeTest(b) {
 }
 
 function defaultSettings() {
-  return { durationMinutes: 45, availabilityStart: "", availabilityEnd: "", maxAttempts: 1, allowPrevious: true, allowReviewMark: true, randomQuestions: false, randomOptions: false, fullscreen: false, tabSwitchWarning: true, calculatorAllowed: false, resultRelease: "IMMEDIATE", rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], answerReview: { enabled: true, showCorrect: true, showExplanation: true }, certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, topCount: 3, template: { style: "Modern", color: "#7c3aed" } }, resultVisibility: defaultResultVisibility() };
+  return { durationMinutes: 45, availabilityStart: "", availabilityEnd: "", maxAttempts: 1, allowPrevious: true, allowReviewMark: true, randomQuestions: false, randomOptions: false, fullscreen: false, tabSwitchWarning: true, calculatorAllowed: false, resultRelease: "IMMEDIATE", rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], answerReview: { enabled: true, showCorrect: true, showExplanation: true }, certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, topCount: 3, template: { style: "DigiCoders", color: "#c79a2b", issuerName: "TestSetu", headline: "Certificate of Achievement" } }, resultVisibility: defaultResultVisibility() };
 }
 function defaultResultVisibility() { return { marks: true, percentage: true, grade: true, rank: true, correctAnswers: true, wrongAnswers: true, explanations: true, topicAnalysis: true, feedback: true }; }
 function defaultBranding() { return { showTeacherName: true, showOrganization: true, showLogo: true, showDesignation: true, showContact: false, showSignature: true }; }
@@ -1153,7 +1167,7 @@ function validateStudentDetails(fields, details) {
 }
 function ensureTestCanStart(test) { const now = Date.now(); if (test.settings.availabilityStart && new Date(test.settings.availabilityStart).getTime() > now) throw statusError(400, "Test has not started yet."); if (test.settings.availabilityEnd && new Date(test.settings.availabilityEnd).getTime() < now) throw statusError(400, "Test is closed for new students."); }
 function requiresManual(q) { return ["LONG_ANSWER", "SHORT_ANSWER"].includes(q.type) && !q.correct.length; }
-function isCorrect(q, value) { const correct = q.correct.map((v) => String(v).trim().toLowerCase()); if (q.type === "MULTIPLE_CORRECT") return JSON.stringify((Array.isArray(value) ? value : []).map((v) => String(v).trim().toLowerCase()).sort()) === JSON.stringify([...correct].sort()); if (q.type === "NUMERICAL") return correct.some((c) => Math.abs(Number(c) - Number(value)) < 0.00001); return correct.includes(String(value).trim().toLowerCase()); }
+function isCorrect(q, value) { const answerValue = normalizeAnswerValue(value); const correct = q.correct.map((v) => String(v).trim().toLowerCase()); if (q.type === "MULTIPLE_CORRECT") return JSON.stringify((Array.isArray(answerValue) ? answerValue : []).map((v) => String(v).trim().toLowerCase()).sort()) === JSON.stringify([...correct].sort()); if (q.type === "NUMERICAL") return correct.some((c) => Math.abs(Number(c) - Number(answerValue)) < 0.00001); return correct.includes(String(answerValue).trim().toLowerCase()); }
 function resultVisibleNow(test) { return test.settings.resultRelease === "IMMEDIATE"; }
 function gradeFor(p) { if (p >= 90) return "A+"; if (p >= 80) return "A"; if (p >= 70) return "B+"; if (p >= 60) return "B"; if (p >= 50) return "C"; return "D"; }
 function resultSummary(rows) { if (!rows.length) return { highest: 0, lowest: 0, average: 0, passPercentage: 0 }; const scores = rows.map((r) => Number(r.score)); return { highest: Math.max(...scores), lowest: Math.min(...scores), average: round(scores.reduce((a, b) => a + b, 0) / scores.length), passPercentage: round((rows.filter((r) => r.passed).length / rows.length) * 100) }; }
@@ -1188,7 +1202,8 @@ function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 function round(n) { return Math.round(Number(n) * 100) / 100; }
 function shouldRandomize(value) { return value === true || value === "true"; }
 function shuffle(items) { return [...items].sort(() => Math.random() - 0.5); }
-function stringifyAnswer(value) { return Array.isArray(value) ? value.join("; ") : String(value ?? ""); }
+function normalizeAnswerValue(value) { if (value && typeof value === "object" && value.option === "__OTHER__") return value.text || ""; return value; }
+function stringifyAnswer(value) { if (value && typeof value === "object" && value.option === "__OTHER__") return `Other: ${value.text || ""}`; return Array.isArray(value) ? value.join("; ") : String(value ?? ""); }
 function csvCell(value) { return `"${String(value ?? "").replaceAll('"', '""')}"`; }
 function sortByCreatedDesc(a, b) { return new Date(b.createdAt || 0) - new Date(a.createdAt || 0); }
 function orderByIds(ids) { const order = new Map(ids.map((id, i) => [String(id), i])); return (a, b) => (order.get(String(a.id)) ?? 99999) - (order.get(String(b.id)) ?? 99999); }
@@ -1243,6 +1258,91 @@ async function audit(actorId, action, entityType, entityId, details = {}) { awai
 async function notifyAdmins(title, body, type) { const admins = await findMany("users", { role: "SUPER_ADMIN", status: "ACTIVE" }); await Promise.all(admins.map((admin) => insert("notifications", { userId: admin.id, title, body, type, readAt: null }))); }
 async function notifyTestStudents(testId, title, body, type) { const attempts = await findMany("attempts", { testId, studentUserId: { $ne: null } }); const ids = [...new Set(attempts.map((a) => a.studentUserId))]; await Promise.all(ids.map((id) => insert("notifications", { userId: id, title, body, type, readAt: null }))); }
 function idFrom(pathName, index) { return decodeURIComponent(pathName.split("/")[index]); }
+
+function certificatePdfBuffer(cert, result) {
+  const template = cert.template || {};
+  const issuer = template.issuerName || "TestSetu";
+  const headline = template.headline || "Certificate of Achievement";
+  const organization = template.organization || "Verified Online Assessment";
+  const verifyUrl = `${APP_URL}/#verify/${encodeURIComponent(cert.certificateId)}`;
+  const pageW = 842, pageH = 595;
+  const streamLines = [
+    "q",
+    "0.98 0.96 0.90 rg 0 0 842 595 re f",
+    "0.78 0.60 0.18 RG 14 w 22 22 798 551 re S",
+    "0.78 0.60 0.18 RG 2 w 42 42 758 511 re S",
+    "0.93 0.86 0.65 rg 54 388 734 38 re f",
+    "0.10 0.13 0.22 rg",
+    textAt(issuer.toUpperCase(), 421, 505, 30, "F2", "center"),
+    textAt(organization, 421, 480, 12, "F1", "center"),
+    textAt(headline.toUpperCase(), 421, 430, 28, "F2", "center"),
+    "0.42 0.31 0.08 rg",
+    textAt("This certificate is proudly presented to", 421, 392, 15, "F1", "center"),
+    "0.07 0.13 0.25 rg",
+    textAt(cert.studentName || result.studentName || "Student", 421, 342, 38, "F2", "center"),
+    "0.78 0.60 0.18 RG 2 w 250 322 342 0 l S",
+    "0.42 0.31 0.08 rg",
+    textAt("for successfully completing", 421, 292, 14, "F1", "center"),
+    "0.12 0.20 0.34 rg",
+    textAt(result.testTitle || "Completed Test", 421, 260, 22, "F2", "center"),
+    "0.90 0.82 0.55 rg 118 175 606 45 re f",
+    "0.30 0.22 0.06 rg",
+    textAt(`Score: ${result.score}/${result.totalMarks}`, 194, 192, 13, "F2", "center"),
+    textAt(`Percentage: ${result.percentage}%`, 350, 192, 13, "F2", "center"),
+    textAt(`Grade: ${result.grade}`, 506, 192, 13, "F2", "center"),
+    textAt(result.rankLabel || (result.passed ? "Passed" : "Completed"), 652, 192, 13, "F2", "center"),
+    "0.10 0.13 0.22 rg",
+    textAt(`Certificate ID: ${cert.certificateId}`, 90, 112, 11, "F1", "left"),
+    textAt(`Issued: ${formatPdfDate(cert.issuedAt || new Date())}`, 90, 92, 11, "F1", "left"),
+    textAt("Verified digitally by TestSetu", 421, 112, 11, "F2", "center"),
+    textAt(verifyUrl, 421, 92, 9, "F1", "center"),
+    textAt("Teacher / Authorized Signatory", 752, 92, 11, "F1", "right"),
+    "0.78 0.60 0.18 RG 1 w 610 112 180 0 l S",
+    "Q"
+  ];
+  return pdfFromContent(pageW, pageH, streamLines.join("\n"), [
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+  ]);
+}
+
+function textAt(value, x, y, size, font = "F1", align = "left") {
+  const text = String(value || "").replace(/[\\()]/g, "\\$&").slice(0, 110);
+  const width = text.length * size * 0.28;
+  const tx = align === "center" ? x - width : align === "right" ? x - width * 2 : x;
+  return `BT /${font} ${size} Tf ${roundPdf(tx)} ${y} Td (${text}) Tj ET`;
+}
+
+function pdfFromContent(pageW, pageH, stream, fonts) {
+  const objects = [];
+  const add = (body) => { objects.push(body); return objects.length; };
+  const catalog = add("<< /Type /Catalog /Pages 2 0 R >>");
+  add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`);
+  add(fonts[0]);
+  add(fonts[1]);
+  add(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+  return finishPdf(objects, catalog);
+}
+
+function finishPdf(objects, catalog) {
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+  for (let i = 0; i < objects.length; i++) { offsets.push(Buffer.byteLength(chunks.join(""))); chunks.push(`${i + 1} 0 obj\n${objects[i]}\nendobj\n`); }
+  const xref = Buffer.byteLength(chunks.join(""));
+  chunks.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
+  for (let i = 1; i < offsets.length; i++) chunks.push(`${String(offsets[i]).padStart(10, "0")} 00000 n \n`);
+  chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return Buffer.from(chunks.join(""));
+}
+
+function formatPdfDate(value) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function roundPdf(value) {
+  return Math.round(Number(value) * 100) / 100;
+}
 
 function simplePdf(title, lines) {
   const objects = [];
