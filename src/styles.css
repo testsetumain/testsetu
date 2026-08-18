@@ -129,6 +129,13 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 .twoCol { display: grid; grid-template-columns: .95fr 1.05fr; gap: 18px; align-items: start; }
 .studioGrid { display: grid; grid-template-columns: minmax(320px, .75fr) minmax(0, 1.25fr); gap: 18px; align-items: start; }
+.studioPaper { display: grid; gap: 18px; min-width: 0; }
+.paperQuestionList { display: grid; gap: 10px; }
+.paperQuestionItem {
+  display: grid; gap: 8px; border: 1px solid var(--line); background: white; border-radius: 8px; padding: 12px;
+}
+.paperQuestionItem > div { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.paperQuestionItem p { margin: 0; overflow-wrap: anywhere; }
 .questionList, .optionStack { display: grid; gap: 12px; }
 .questionCard, .miniCard, .testCardSmall, .studentQuestion, .resultCard, .previewCard {
   border: 1px solid var(--line); background: white; border-radius: 8px; padding: 16px;
@@ -138,8 +145,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .questionCard img, .uploadBox img, .questionImage { width: 100%; max-height: 220px; object-fit: contain; border-radius: 8px; background: #f8fafc; border: 1px solid var(--line); }
 .uploadBox { display: grid; gap: 10px; border: 1px dashed var(--secondary); border-radius: 8px; padding: 12px; background: var(--sky); color: var(--secondary); font-weight: 800; }
 .questionPicker { display: grid; gap: 10px; max-height: 460px; overflow: auto; }
-.questionPicker button { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: white; text-align: left; cursor: pointer; }
-.questionPicker button.selected { border-color: var(--success); background: var(--mint); }
+.questionPicker button, .questionChoice { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: white; text-align: left; cursor: pointer; }
+.questionChoice { cursor: default; }
+.questionPicker button.selected, .questionChoice.selected { border-color: var(--success); background: var(--mint); }
 .fieldRules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .fieldRules > div { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
 .builderActions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }

@@ -490,7 +490,11 @@ async function listTeacherTests(res, user) {
 }
 
 async function saveTest(req, res, user) {
-  const b = normalizeTest(await readBody(req));
+  const body = await readBody(req);
+  const embeddedQuestions = normalizeEmbeddedQuestions(body.embeddedQuestions);
+  const b = normalizeTest(body);
+  const embeddedQuestionIds = await createExamOnlyQuestions(user, embeddedQuestions);
+  b.questionIds = [...b.questionIds, ...embeddedQuestionIds];
   if (b.status === "PUBLISHED" && b.questionIds.length === 0) throw statusError(400, "Add at least one question before publishing.");
   const test = await insert("tests", {
     teacherId: user.id,
@@ -515,6 +519,7 @@ async function saveTest(req, res, user) {
     publishedAt: b.status === "PUBLISHED" ? new Date() : null,
     questionIds: b.questionIds
   });
+  if (embeddedQuestionIds.length) await col("questions").updateMany({ _id: { $in: embeddedQuestionIds.map(oid) }, teacherId: user.id }, { $set: { examOnlyTestId: test.id, updatedAt: new Date() } });
   await bumpQuestionUsage(user.id, b.questionIds);
   await snapshotTest(test.id);
   await audit(user.id, "CREATE_TEST", "Test", test.id);
@@ -523,7 +528,10 @@ async function saveTest(req, res, user) {
 
 async function updateTest(req, res, user, id) {
   await ensureOwnTest(user.id, id);
-  const b = normalizeTest(await readBody(req));
+  const body = await readBody(req);
+  const embeddedQuestionIds = await createExamOnlyQuestions(user, normalizeEmbeddedQuestions(body.embeddedQuestions), id);
+  const b = normalizeTest(body);
+  b.questionIds = [...b.questionIds, ...embeddedQuestionIds];
   await updateOne("tests", { _id: oid(id), teacherId: user.id }, { $set: { ...b, questionIds: b.questionIds, updatedAt: new Date() }, $inc: { version: 1 } });
   await bumpQuestionUsage(user.id, b.questionIds);
   await snapshotTest(id);
@@ -540,11 +548,13 @@ async function deleteTest(res, user, id) {
   const objections = await findMany("objections", { testId: id });
   const histories = await findMany("testHistory", { testId: id });
   const notifications = await findMany("notifications", { $or: [{ entityId: id }, { testId: id }] });
+  const examOnlyQuestions = await findMany("questions", { teacherId: user.id, examOnly: true, examOnlyTestId: id });
   const attemptIds = attempts.map((a) => a.id);
   const resultIds = results.map((r) => r.id);
   const certificateIds = certificates.map((c) => c.id);
   const objectionIds = objections.map((o) => o.id);
-  const uploadIds = [...collectUploadIds([test, attempts, results, certificates, objections, histories, notifications])];
+  const examOnlyQuestionIds = examOnlyQuestions.map((q) => q.id);
+  const uploadIds = [...collectUploadIds([test, attempts, results, certificates, objections, histories, notifications, examOnlyQuestions])];
 
   await deleteUploadFiles(uploadIds);
   await Promise.all([
@@ -554,13 +564,15 @@ async function deleteTest(res, user, id) {
     col("certificates").deleteMany({ testId: id }),
     col("objections").deleteMany({ testId: id }),
     col("testHistory").deleteMany({ testId: id }),
+    col("questions").deleteMany({ teacherId: user.id, examOnly: true, examOnlyTestId: id }),
     col("notifications").deleteMany({ $or: [{ entityId: id }, { testId: id }] }),
     col("auditLogs").deleteMany({ $or: [
       { entityType: "Test", entityId: id },
       { entityType: "Attempt", entityId: { $in: attemptIds } },
       { entityType: "Result", entityId: { $in: resultIds } },
       { entityType: "Certificate", entityId: { $in: certificateIds } },
-      { entityType: "Objection", entityId: { $in: objectionIds } }
+      { entityType: "Objection", entityId: { $in: objectionIds } },
+      { entityType: "Question", entityId: { $in: examOnlyQuestionIds } }
     ] })
   ]);
 
@@ -569,9 +581,10 @@ async function deleteTest(res, user, id) {
     results: resultIds.length,
     certificates: certificateIds.length,
     objections: objectionIds.length,
+    questions: examOnlyQuestionIds.length,
     files: uploadIds.length
   });
-  return send(res, 200, { ok: true, deleted: { test: id, attempts: attemptIds.length, results: resultIds.length, certificates: certificateIds.length, objections: objectionIds.length, files: uploadIds.length } });
+  return send(res, 200, { ok: true, deleted: { test: id, attempts: attemptIds.length, results: resultIds.length, certificates: certificateIds.length, objections: objectionIds.length, questions: examOnlyQuestionIds.length, files: uploadIds.length } });
 }
 
 async function getFullTestForTeacher(id, teacherId) {
@@ -1146,6 +1159,18 @@ function parseTest(t) {
 function normalizeQuestion(b) {
   if (!b.text || String(b.text).trim().length < 3) throw statusError(400, "Question text is required.");
   return { type: b.type || "MCQ", text: String(b.text).trim(), imageUrl: b.imageUrl || "", options: Array.isArray(b.options) ? b.options.filter(Boolean) : [], correct: Array.isArray(b.correct) ? b.correct : [b.correct].filter(Boolean), marks: Number(b.marks || 1), negativeMarks: Number(b.negativeMarks || 0), explanation: b.explanation || "", subject: b.subject || "", chapter: b.chapter || "", topic: b.topic || "", difficulty: b.difficulty || "Medium", tags: Array.isArray(b.tags) ? b.tags : String(b.tags || "").split(",").map((x) => x.trim()).filter(Boolean), favorite: !!b.favorite, allowOther: !!b.allowOther };
+}
+
+function normalizeEmbeddedQuestions(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map(normalizeQuestion);
+}
+
+async function createExamOnlyQuestions(user, questions, testId = null) {
+  if (!questions.length) return [];
+  const rows = await Promise.all(questions.map((q) => insert("questions", { ...q, teacherId: user.id, usageCount: 0, archived: true, examOnly: true, examOnlyTestId: testId })));
+  await Promise.all(rows.map((q) => audit(user.id, "CREATE_EXAM_ONLY_QUESTION", "Question", q.id)));
+  return rows.map((q) => q.id);
 }
 
 function normalizeTest(b) {

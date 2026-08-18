@@ -475,7 +475,7 @@ function TeacherDashboard({ token, user, notify }: any) {
           <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
         </>
       )}
-      {tab === "studio" && <ExamStudio token={token} questions={questions} onRefresh={load} notify={notify} />}
+      {tab === "studio" && <ExamStudio token={token} onRefresh={load} notify={notify} />}
       {tab === "builder" && <TestBuilder token={token} questions={questions} editingTest={editingTest} onCancelEdit={() => setEditingTest(null)} onSaved={() => { notify(editingTest ? "Test updated." : "Test saved."); setEditingTest(null); load(); }} />}
       {tab === "questions" && <QuestionBank token={token} questions={questions} onSaved={() => { notify("Question saved."); load(); }} />}
       {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
@@ -487,21 +487,60 @@ function TeacherDashboard({ token, user, notify }: any) {
   );
 }
 
-function ExamStudio({ token, questions, onRefresh, notify }: any) {
+function ExamStudio({ token, onRefresh, notify }: any) {
+  const [paperQuestions, setPaperQuestions] = useState<any[]>([]);
+  const [paperKey, setPaperKey] = useState(0);
+  const addPaperQuestion = (question: any) => {
+    const id = `paper-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setPaperQuestions((items) => [...items, { ...question, id }]);
+    notify("Question added to this paper only.");
+  };
+  const removePaperQuestion = (id: string) => setPaperQuestions((items) => items.filter((q) => q.id !== id));
+  const resetPaper = () => {
+    setPaperQuestions([]);
+    setPaperKey((key) => key + 1);
+  };
   return (
     <div className="studioGrid">
-      <QuickQuestionComposer token={token} onCreated={async () => { notify("Question added to this exam workspace."); await onRefresh(); }} />
-      <TestBuilder token={token} questions={questions} onSaved={() => { notify("Exam saved."); onRefresh(); }} />
+      <QuickQuestionComposer onCreated={addPaperQuestion} />
+      <div className="studioPaper">
+        <Section title="This Paper's Questions" action={<button className="secondaryBtn" type="button" onClick={resetPaper}>New Paper</button>}>
+          {paperQuestions.length ? (
+            <div className="paperQuestionList">
+              {paperQuestions.map((q, index) => (
+                <article className="paperQuestionItem" key={q.id}>
+                  <div>
+                    <span className="pill">Q{index + 1}</span>
+                    <b>{q.marks} marks</b>
+                  </div>
+                  <p>{q.text}</p>
+                  <button className="secondaryBtn" type="button" onClick={() => removePaperQuestion(q.id)}><Trash2 size={16} /> Remove</button>
+                </article>
+              ))}
+            </div>
+          ) : <Empty title="Add questions for this paper" />}
+        </Section>
+        <TestBuilder
+          key={paperKey}
+          token={token}
+          questions={paperQuestions}
+          studioMode
+          onSaved={() => {
+            notify("Paper saved. Studio is ready for the next paper.");
+            resetPaper();
+            onRefresh();
+          }}
+        />
+      </div>
     </div>
   );
 }
 
-function QuickQuestionComposer({ token, onCreated }: any) {
+function QuickQuestionComposer({ onCreated }: any) {
   const empty = () => ({ type: "MCQ", text: "", options: ["", "", "", ""], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", allowOther: false });
   const objectiveTypes = ["MCQ", "TRUE_FALSE", "ASSERTION_REASON", "IMAGE_BASED", "PASSAGE_BASED"];
   const optionTypes = [...objectiveTypes, "MULTIPLE_CORRECT"];
   const [form, setForm] = useState<any>(empty());
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const setOption = (i: number, v: string) => {
     const options = [...form.options];
@@ -511,15 +550,13 @@ function QuickQuestionComposer({ token, onCreated }: any) {
   const save = async (e: any) => {
     e.preventDefault();
     try {
-      setError("");
-      setSaving(true);
-      await api("/teacher/questions", { method: "POST", token, body: form });
+      if (!String(form.text || "").trim()) throw new Error("Question text is required.");
+      if (optionTypes.includes(form.type) && form.options.filter(Boolean).length < 2) throw new Error("At least two options are required.");
+      if (!form.correct?.length) throw new Error("Correct answer select karein.");
+      onCreated({ ...form, correct: Array.isArray(form.correct) ? form.correct : [form.correct] });
       setForm(empty());
-      onCreated();
     } catch (err: any) {
       setError(err.message || "Question save failed.");
-    } finally {
-      setSaving(false);
     }
   };
   return (
@@ -544,7 +581,7 @@ function QuickQuestionComposer({ token, onCreated }: any) {
         <div className="inlineFields"><Field label="Marks" type="number" value={form.marks} onChange={(v: string) => setForm({ ...form, marks: Number(v) })} /><Field label="Negative" type="number" value={form.negativeMarks} onChange={(v: string) => setForm({ ...form, negativeMarks: Number(v) })} /></div>
         <div className="inlineFields"><Field label="Subject" value={form.subject} onChange={(v: string) => setForm({ ...form, subject: v })} /><Field label="Topic" value={form.topic} onChange={(v: string) => setForm({ ...form, topic: v })} /></div>
         <TextArea label="Explanation" value={form.explanation} onChange={(v: string) => setForm({ ...form, explanation: v })} />
-        <button className="primaryBtn" disabled={saving}>{saving ? "Saving..." : "Save Question"}</button>
+        <button className="primaryBtn"><Plus size={18} /> Add To Paper</button>
       </form>
     </Section>
   );
@@ -660,7 +697,7 @@ function QuestionBank({ token, questions, onSaved }: any) {
   );
 }
 
-function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit }: any) {
+function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, studioMode = false }: any) {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -693,16 +730,25 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit }: a
     });
     setStep(1);
   }, [editingTest?.id]);
-  useEffect(() => { if (!editingTest) localStorage.setItem("testsetu_builder_draft", JSON.stringify(form)); }, [form, editingTest]);
-  const totalMarks = questions.filter((q: any) => form.questionIds.includes(q.id)).reduce((s: number, q: any) => s + Number(q.marks), 0);
+  useEffect(() => { if (!editingTest && !studioMode) localStorage.setItem("testsetu_builder_draft", JSON.stringify(form)); }, [form, editingTest, studioMode]);
+  const selectedQuestionIds = studioMode ? questions.map((q: any) => q.id) : form.questionIds;
+  const selectedQuestions = questions.filter((q: any) => selectedQuestionIds.includes(q.id));
+  const totalMarks = selectedQuestions.reduce((s: number, q: any) => s + Number(q.marks), 0);
   const save = async (publish = false) => {
     try {
       setError("");
       setSaving(true);
-      if (publish && form.questionIds.length === 0) throw new Error("Publish karne se pehle at least one question select karein.");
+      if (publish && selectedQuestions.length === 0) throw new Error("Publish karne se pehle at least one question add karein.");
       const path = editingTest ? `/teacher/tests/${editingTest.id}` : "/teacher/tests";
       const method = editingTest ? "PUT" : "POST";
-      const saved = await api(path, { method, token, body: { ...form, totalMarks, status: publish ? "PUBLISHED" : (editingTest?.status || "DRAFT") } });
+      const payload = {
+        ...form,
+        questionIds: studioMode ? [] : form.questionIds,
+        embeddedQuestions: studioMode ? selectedQuestions.map(({ id, ...q }: any) => q) : undefined,
+        totalMarks,
+        status: publish ? "PUBLISHED" : (editingTest?.status || "DRAFT")
+      };
+      const saved = await api(path, { method, token, body: payload });
       if (publish) await api(`/teacher/tests/${saved.test.id}/publish`, { method: "POST", token });
       onSaved();
     } catch (err: any) {
@@ -722,14 +768,18 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit }: a
       <div className="builderSteps">{["Basic", "Questions", "Timing", "Student Details", "Instructions", "Result", "Certificate", "Design", "Preview", "Publish"].map((s, i) => <button className={step === i + 1 ? "active" : ""} onClick={() => setStep(i + 1)} key={s}>{s}</button>)}</div>
       {error && <div className="formError">{error}</div>}
       {step === 1 && <div className="formGrid"><Field label="Test name" value={form.title} onChange={(v: string) => setForm({ ...form, title: v })} /><Field label="Subject" value={form.subject} onChange={(v: string) => setForm({ ...form, subject: v })} /><Field label="Class" value={form.className} onChange={(v: string) => setForm({ ...form, className: v })} /><TextArea label="Description" value={form.description} onChange={(v: string) => setForm({ ...form, description: v })} /></div>}
-      {step === 2 && <div className="questionPicker">{questions.map((q: any) => <button key={q.id} className={form.questionIds.includes(q.id) ? "selected" : ""} onClick={() => toggleQuestion(q.id)}><span>{q.text}</span><b>{q.marks} marks</b></button>)}</div>}
+      {step === 2 && (studioMode ? (
+        <div className="questionPicker">
+          {questions.length ? questions.map((q: any, index: number) => <div className="questionChoice selected" key={q.id}><span>{index + 1}. {q.text}</span><b>{q.marks} marks</b></div>) : <Empty title="Add questions from the Studio composer first" />}
+        </div>
+      ) : <div className="questionPicker">{questions.map((q: any) => <button key={q.id} className={form.questionIds.includes(q.id) ? "selected" : ""} onClick={() => toggleQuestion(q.id)}><span>{q.text}</span><b>{q.marks} marks</b></button>)}</div>)}
       {step === 3 && <div className="formGrid"><Field label="Duration minutes" type="number" value={form.settings.durationMinutes} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, durationMinutes: Number(v) } })} /><Field label="Availability start" type="datetime-local" value={form.settings.availabilityStart || ""} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, availabilityStart: v } })} /><Field label="Availability end" type="datetime-local" value={form.settings.availabilityEnd || ""} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, availabilityEnd: v } })} /><Select label="Access mode" value={form.accessMode} onChange={(v: string) => setForm({ ...form, accessMode: v })} options={["LOGIN_REQUIRED", "GUEST_ALLOWED", "TEMPORARY_LOGIN", "EXISTING_ACCOUNT_ONLY"]} /></div>}
       {step === 4 && <div className="fieldRules">{form.studentFields.map((f: any, i: number) => <div key={f.key}><b>{f.label}</b><div className="segmented mini">{["hide", "optional", "required"].map((m) => <button className={f.mode === m ? "active" : ""} onClick={() => setFieldMode(i, m)} key={m}>{m}</button>)}</div></div>)}</div>}
       {step === 5 && <div className="formGrid"><TextArea label="English instructions" value={form.instructionsEn} onChange={(v: string) => setForm({ ...form, instructionsEn: v })} /><TextArea label="Hindi instructions" value={form.instructionsHi} onChange={(v: string) => setForm({ ...form, instructionsHi: v })} /></div>}
       {step === 6 && <div className="formGrid"><Select label="Result release" value={form.settings.resultRelease} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, resultRelease: v } })} options={["IMMEDIATE", "AFTER_TEST_END", "AFTER_TEACHER_PUBLISHES", "NEVER"]} /><Field label="Passing marks" type="number" value={form.passingMarks} onChange={(v: string) => setForm({ ...form, passingMarks: Number(v) })} /><Toggle label="Ranking enabled" value={form.settings.rankingEnabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, rankingEnabled: v } })} /></div>}
       {step === 7 && <div className="formGrid"><Toggle label="Certificates enabled" value={form.settings.certificate.enabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, enabled: v } } })} /><Select label="Eligibility" value={form.settings.certificate.eligibility} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, eligibility: v } } })} options={["EVERYONE", "PASSED", "MIN_PERCENTAGE", "TOP_STUDENTS", "MANUAL_APPROVAL"]} /></div>}
       {step === 8 && <CertificateDesignEditor form={form} setForm={setForm} totalMarks={totalMarks} />}
-      {step >= 9 && <PreviewCard form={form} totalMarks={totalMarks} questions={questions.filter((q: any) => form.questionIds.includes(q.id))} />}
+      {step >= 9 && <PreviewCard form={form} totalMarks={totalMarks} questions={selectedQuestions} />}
       <div className="builderActions">
         <button className="secondaryBtn" disabled={step === 1} onClick={() => setStep(step - 1)}>Previous</button>
         <button className="secondaryBtn" disabled={step === 10} onClick={() => setStep(step + 1)}>Next</button>
