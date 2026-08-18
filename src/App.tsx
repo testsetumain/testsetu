@@ -717,7 +717,7 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, stu
   const defaultTestForm = () => ({
     title: "", subject: "", className: "", description: "", passingMarks: 0, accessMode: "GUEST_ALLOWED", accessCode: "",
     questionIds: [], instructionsEn: "Read every question carefully. Confirm when you are ready to start.", instructionsHi: "हर प्रश्न ध्यान से पढ़ें। तैयार होने पर टेस्ट शुरू करें।",
-    settings: { durationMinutes: 45, maxAttempts: 1, rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], resultRelease: "IMMEDIATE", certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, template: { style: "DigiCoders", color: "#c79a2b", issuerName: "TestSetu", headline: "Certificate of Achievement" } }, answerReview: { enabled: true, showCorrect: true, showExplanation: true } },
+    settings: { durationMinutes: 45, maxAttempts: 1, rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], resultRelease: "IMMEDIATE", resultTemplate: { style: "Executive", color: "#4051d6", issuerName: "TestSetu", headline: "Performance Report", organization: "Verified Online Assessment" }, certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, template: { style: "Signature", color: "#c79a2b", issuerName: "TestSetu", headline: "Certificate of Achievement" } }, answerReview: { enabled: true, showCorrect: true, showExplanation: true } },
     studentFields: [
       { key: "fullName", label: "Full Name", mode: "required" },
       { key: "rollNumber", label: "Roll Number", mode: "optional" },
@@ -736,6 +736,7 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, stu
       settings: {
         ...base.settings,
         ...(editingTest.settings || {}),
+        resultTemplate: { ...base.settings.resultTemplate, ...(editingTest.settings?.resultTemplate || {}) },
         certificate: { ...base.settings.certificate, ...(editingTest.settings?.certificate || {}), template: { ...base.settings.certificate.template, ...(editingTest.settings?.certificate?.template || {}) } },
         answerReview: { ...base.settings.answerReview, ...(editingTest.settings?.answerReview || {}) }
       },
@@ -789,7 +790,7 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, stu
       {step === 3 && <div className="formGrid"><Field label="Duration minutes" type="number" value={form.settings.durationMinutes} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, durationMinutes: Number(v) } })} /><Field label="Availability start" type="datetime-local" value={form.settings.availabilityStart || ""} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, availabilityStart: v } })} /><Field label="Availability end" type="datetime-local" value={form.settings.availabilityEnd || ""} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, availabilityEnd: v } })} /><Select label="Access mode" value={form.accessMode} onChange={(v: string) => setForm({ ...form, accessMode: v })} options={["LOGIN_REQUIRED", "GUEST_ALLOWED", "TEMPORARY_LOGIN", "EXISTING_ACCOUNT_ONLY"]} /></div>}
       {step === 4 && <div className="fieldRules">{form.studentFields.map((f: any, i: number) => <div key={f.key}><b>{f.label}</b><div className="segmented mini">{["hide", "optional", "required"].map((m) => <button className={f.mode === m ? "active" : ""} onClick={() => setFieldMode(i, m)} key={m}>{m}</button>)}</div></div>)}</div>}
       {step === 5 && <div className="formGrid"><TextArea label="English instructions" value={form.instructionsEn} onChange={(v: string) => setForm({ ...form, instructionsEn: v })} /><TextArea label="Hindi instructions" value={form.instructionsHi} onChange={(v: string) => setForm({ ...form, instructionsHi: v })} /></div>}
-      {step === 6 && <div className="formGrid"><Select label="Result release" value={form.settings.resultRelease} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, resultRelease: v } })} options={["IMMEDIATE", "AFTER_TEST_END", "AFTER_TEACHER_PUBLISHES", "NEVER"]} /><Field label="Passing marks" type="number" value={form.passingMarks} onChange={(v: string) => setForm({ ...form, passingMarks: Number(v) })} /><Toggle label="Ranking enabled" value={form.settings.rankingEnabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, rankingEnabled: v } })} /></div>}
+      {step === 6 && <ResultDesignEditor form={form} setForm={setForm} totalMarks={totalMarks} />}
       {step === 7 && <div className="formGrid"><Toggle label="Certificates enabled" value={form.settings.certificate.enabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, enabled: v } } })} /><Select label="Eligibility" value={form.settings.certificate.eligibility} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, eligibility: v } } })} options={["EVERYONE", "PASSED", "MIN_PERCENTAGE", "TOP_STUDENTS", "MANUAL_APPROVAL"]} /></div>}
       {step === 8 && <CertificateDesignEditor form={form} setForm={setForm} totalMarks={totalMarks} />}
       {step >= 9 && <PreviewCard form={form} totalMarks={totalMarks} questions={selectedQuestions} />}
@@ -1170,23 +1171,52 @@ function TestCards({ tests, publish, results, releaseResults, publishingId, acti
   );
 }
 
+function ProfessionalResult({ result, compact = false }: any) {
+  const template = result.testSettings?.resultTemplate || result.test?.settings?.resultTemplate || {};
+  const color = template.color || "#4051d6";
+  const styleName = String(template.style || "Executive").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const total = result.total_marks ?? result.totalMarks ?? 0;
+  const rank = result.rank_label || result.rankLabel || "Rank pending";
+  const timeTaken = result.time_taken ?? result.timeTaken;
+  const detailsAvailable = result.detailsAvailable !== false;
+  return (
+    <article className={`proResult style-${styleName}${compact ? " compact" : ""}`} style={{ "--result-accent": color } as any}>
+      <header>
+        <div>
+          <Medal size={compact ? 22 : 30} />
+          <span>{template.issuerName || result.teacher_name || "TestSetu"}</span>
+        </div>
+        <b>{template.organization || result.organization_name || "Verified Online Assessment"}</b>
+      </header>
+      <div className="resultHeroLine">
+        <span>{template.headline || (detailsAvailable ? "Performance Report" : "Score Card")}</span>
+        <h2>{result.studentName || result.student_name || "Student"}</h2>
+        <p>{result.testTitle || result.test_title || result.title || "Completed Test"}</p>
+      </div>
+      <div className="resultScoreGrid">
+        <div className="resultPercent"><b>{result.percentage ?? 0}%</b><span>{result.passed ? "Passed" : "Needs Improvement"}</span></div>
+        <div><span>Score</span><b>{result.score}/{total}</b></div>
+        <div><span>Grade</span><b>{result.grade || "-"}</b></div>
+        {detailsAvailable && <div><span>Rank</span><b>{rank}</b></div>}
+      </div>
+      {detailsAvailable && (
+        <div className="resultBreakdown">
+          <span><b>{result.correct ?? "-"}</b>Correct</span>
+          <span><b>{result.wrong ?? "-"}</b>Wrong</span>
+          <span><b>{result.unattempted ?? "-"}</b>Unattempted</span>
+          <span><b>{timeTaken != null ? formatTime(Number(timeTaken)) : "-"}</b>Time</span>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function ResultCard({ result, compact = false, token }: any) {
   const detailsAvailable = result.detailsAvailable !== false;
   return (
     <section className={compact ? "resultCard compact" : "resultCard"}>
-      <div><Medal size={28} /><h2>{detailsAvailable ? (result.testTitle || result.title || "Result") : "Score Card"}</h2></div>
-      <p>{result.studentName}</p>
-      <div className="scoreRing">{result.percentage}%</div>
-      <div className="resultFacts">
-        <span>{result.score}/{result.total_marks}</span>
-        <span>{result.percentage}%</span>
-        <span>{result.passed ? "Passed" : "Failed"}</span>
-        {detailsAvailable && <span>{result.grade}</span>}
-        {detailsAvailable && <span>{result.rank_label || "Rank pending"}</span>}
-        {detailsAvailable && <span>Correct {result.correct}</span>}
-        {detailsAvailable && <span>Wrong {result.wrong}</span>}
-      </div>
-      {!detailsAvailable && <div className="lockedNotice"><Lock size={17} /> Detailed result, rank, answer review and certificate will unlock after the test ends{result.lockedUntil ? ` (${formatDateTime(result.lockedUntil)})` : ""}.</div>}
+      <ProfessionalResult result={result} compact={compact} />
+      {!detailsAvailable && <div className="lockedNotice"><Lock size={17} /> {result.lockedMessage || `Detailed result, rank, answer review and certificate will unlock after the test ends${result.lockedUntil ? ` (${formatDateTime(result.lockedUntil)})` : ""}.`}</div>}
       {detailsAvailable && !compact && <AnswerReview result={result} />}
       {result.id && <div className="rowActions centeredActions">
         <a className="secondaryBtn" href={`#result/${result.id}`}>{detailsAvailable ? "View Result" : "View Score"}</a>
@@ -1246,8 +1276,50 @@ function PreviewCard({ form, totalMarks, questions }: any) {
   return <div className="previewCard"><h2>{form.title || "Untitled Test"}</h2><p>{form.subject} | {totalMarks} marks | {form.settings.durationMinutes} minutes</p><p>{questions.length} questions selected. Result release: {form.settings.resultRelease}. Ranking: {form.settings.rankingEnabled ? "On" : "Off"}.</p></div>;
 }
 
+function ResultDesignEditor({ form, setForm, totalMarks }: any) {
+  const template = form.settings.resultTemplate || {};
+  const setTemplate = (patch: any) => setForm({ ...form, settings: { ...form.settings, resultTemplate: { ...template, ...patch } } });
+  const preview = {
+    testSettings: { resultTemplate: template },
+    studentName: "Abhinav Yadav",
+    testTitle: form.title || "Sample Test",
+    subject: form.subject || "Course",
+    className: form.className || "Batch",
+    score: totalMarks || 86,
+    total_marks: totalMarks || 100,
+    totalMarks: totalMarks || 100,
+    percentage: totalMarks ? 100 : 86,
+    grade: "A",
+    passed: true,
+    rank_label: "Rank 1",
+    correct: 18,
+    wrong: 2,
+    unattempted: 0,
+    time_taken: 2140,
+    issued_at: new Date().toISOString()
+  };
+  return (
+    <div className="designGrid">
+      <div className="formGrid">
+        <Select label="Result release" value={form.settings.resultRelease} onChange={(v: string) => setForm({ ...form, settings: { ...form.settings, resultRelease: v } })} options={["IMMEDIATE", "AFTER_TEST_END", "AFTER_TEACHER_PUBLISHES", "NEVER"]} />
+        <Field label="Passing marks" type="number" value={form.passingMarks} onChange={(v: string) => setForm({ ...form, passingMarks: Number(v) })} />
+        <Toggle label="Ranking enabled" value={form.settings.rankingEnabled} onChange={(v: boolean) => setForm({ ...form, settings: { ...form.settings, rankingEnabled: v } })} />
+        <Select label="Result style" value={template.style || "Executive"} onChange={(v: string) => setTemplate({ style: v })} options={["Executive", "Score Sheet", "Classic"]} />
+        <Field label="Result headline" value={template.headline || "Performance Report"} onChange={(v: string) => setTemplate({ headline: v })} />
+        <Field label="Issuer / institute name" value={template.issuerName || "TestSetu"} onChange={(v: string) => setTemplate({ issuerName: v })} />
+        <Field label="Organization tagline" value={template.organization || "Verified Online Assessment"} onChange={(v: string) => setTemplate({ organization: v })} />
+        <Field label="Accent color" type="color" value={template.color || "#4051d6"} onChange={(v: string) => setTemplate({ color: v })} />
+      </div>
+      <div className="previewPane">
+        <ProfessionalResult result={preview} compact />
+      </div>
+    </div>
+  );
+}
+
 function CertificateDesignEditor({ form, setForm, totalMarks }: any) {
   const template = form.settings.certificate.template || {};
+  const selectedStyle = template.style === "DigiCoders" ? "Signature" : (template.style || "Signature");
   const setTemplate = (patch: any) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, template: { ...template, ...patch } } } });
   const preview = {
     template,
@@ -1272,13 +1344,15 @@ function CertificateDesignEditor({ form, setForm, totalMarks }: any) {
   return (
     <div className="certificateDesignGrid">
       <div className="formGrid">
-        <Select label="Certificate style" value={template.style || "DigiCoders"} onChange={(v: string) => setTemplate({ style: v })} options={["DigiCoders", "Marksheet", "Classic"]} />
+        <Select label="Certificate style" value={selectedStyle} onChange={(v: string) => setTemplate({ style: v })} options={["Signature", "Marksheet", "Classic"]} />
         <Field label="Certificate headline" value={template.headline || "Certificate of Achievement"} onChange={(v: string) => setTemplate({ headline: v })} />
         <Field label="Issuer / institute name" value={template.issuerName || "TestSetu"} onChange={(v: string) => setTemplate({ issuerName: v })} />
         <Field label="Organization tagline" value={template.organization || "Verified Online Assessment"} onChange={(v: string) => setTemplate({ organization: v })} />
         <Field label="Accent color" type="color" value={template.color || "#c79a2b"} onChange={(v: string) => setTemplate({ color: v })} />
       </div>
-      <ProfessionalCertificate certificate={preview} qr="" compact />
+      <div className="certificatePreviewPane">
+        <ProfessionalCertificate certificate={preview} qr="" compact />
+      </div>
     </div>
   );
 }
@@ -1286,7 +1360,7 @@ function CertificateDesignEditor({ form, setForm, totalMarks }: any) {
 function ProfessionalCertificate({ certificate, qr, compact = false }: any) {
   const template = certificate.template || certificate.test?.settings?.certificate?.template || {};
   const color = template.color || "#c79a2b";
-  const styleName = String(template.style || "DigiCoders").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const styleName = String(template.style === "DigiCoders" ? "Signature" : (template.style || "Signature")).toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return (
     <article className={`proCertificate style-${styleName}${compact ? " compact" : ""}`} style={{ "--cert-accent": color } as any}>
       <div className="certCorner tl" /><div className="certCorner tr" /><div className="certCorner bl" /><div className="certCorner br" />

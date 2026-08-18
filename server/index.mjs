@@ -946,8 +946,7 @@ async function resultPdf(res, id, user) {
   const result = await getResult(id);
   ensureResultAccess(result, user);
   const detailed = canSeeDetailedResult(result, user);
-  const lines = detailed ? [`Student: ${result.studentName}`, `Test: ${result.testTitle}`, `Marks: ${result.score} / ${result.totalMarks}`, `Percentage: ${result.percentage}%`, `Grade: ${result.grade}`, `Status: ${result.passed ? "Passed" : "Needs improvement"}`, `Rank: ${result.rankLabel || "Not ranked"}`, `Correct: ${result.correct}  Wrong: ${result.wrong}  Unattempted: ${result.unattempted}`, `Generated from verified TestSetu MongoDB records.`] : [`Student: ${result.studentName}`, `Test: ${result.testTitle}`, `Score: ${result.score} / ${result.totalMarks}`, `Percentage: ${result.percentage}%`, `Status: ${result.passed ? "Passed" : "Not passed"}`, `Detailed result, rank, answer review and certificate will unlock after the test ends.`];
-  sendPdf(res, simplePdf(detailed ? "TestSetu Result Card" : "TestSetu Score Card", lines), `result-${id}.pdf`);
+  sendPdf(res, resultPdfBuffer(result, detailed), `result-${id}.pdf`);
 }
 
 async function answerReviewPdf(res, id, user) {
@@ -1195,7 +1194,7 @@ function normalizeTest(b) {
 }
 
 function defaultSettings() {
-  return { durationMinutes: 45, availabilityStart: "", availabilityEnd: "", maxAttempts: 1, allowPrevious: true, allowReviewMark: true, randomQuestions: false, randomOptions: false, fullscreen: false, tabSwitchWarning: true, calculatorAllowed: false, resultRelease: "IMMEDIATE", rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], answerReview: { enabled: true, showCorrect: true, showExplanation: true }, certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, topCount: 3, template: { style: "DigiCoders", color: "#c79a2b", issuerName: "TestSetu", headline: "Certificate of Achievement" } }, resultVisibility: defaultResultVisibility() };
+  return { durationMinutes: 45, availabilityStart: "", availabilityEnd: "", maxAttempts: 1, allowPrevious: true, allowReviewMark: true, randomQuestions: false, randomOptions: false, fullscreen: false, tabSwitchWarning: true, calculatorAllowed: false, resultRelease: "IMMEDIATE", rankingEnabled: true, tieBreakers: ["accuracy", "timeTaken"], answerReview: { enabled: true, showCorrect: true, showExplanation: true }, resultTemplate: { style: "Executive", color: "#4051d6", issuerName: "TestSetu", headline: "Performance Report", organization: "Verified Online Assessment" }, certificate: { enabled: true, eligibility: "PASSED", minimumPercentage: 33, topCount: 3, template: { style: "Signature", color: "#c79a2b", issuerName: "TestSetu", headline: "Certificate of Achievement" } }, resultVisibility: defaultResultVisibility() };
 }
 function defaultResultVisibility() { return { marks: true, percentage: true, grade: true, rank: true, correctAnswers: true, wrongAnswers: true, explanations: true, topicAnalysis: true, feedback: true }; }
 function defaultBranding() { return { showTeacherName: true, showOrganization: true, showLogo: true, showDesignation: true, showContact: false, showSignature: true }; }
@@ -1236,7 +1235,7 @@ function studentDetailMatchFilters(details = {}) {
 }
 function requiresManual(q) { return ["LONG_ANSWER", "SHORT_ANSWER"].includes(q.type) && !q.correct.length; }
 function isCorrect(q, value) { const answerValue = normalizeAnswerValue(value); const correct = q.correct.map((v) => String(v).trim().toLowerCase()); if (q.type === "MULTIPLE_CORRECT") return JSON.stringify((Array.isArray(answerValue) ? answerValue : []).map((v) => String(v).trim().toLowerCase()).sort()) === JSON.stringify([...correct].sort()); if (q.type === "NUMERICAL") return correct.some((c) => Math.abs(Number(c) - Number(answerValue)) < 0.00001); return correct.includes(String(answerValue).trim().toLowerCase()); }
-function resultVisibleNow(test) { return test.settings.resultRelease === "IMMEDIATE"; }
+function resultVisibleNow(test) { return test?.settings?.resultRelease === "IMMEDIATE"; }
 function gradeFor(p) { if (p >= 90) return "A+"; if (p >= 80) return "A"; if (p >= 70) return "B+"; if (p >= 60) return "B"; if (p >= 50) return "C"; return "D"; }
 function resultSummary(rows) { if (!rows.length) return { highest: 0, lowest: 0, average: 0, passPercentage: 0 }; const scores = rows.map((r) => Number(r.score)); return { highest: Math.max(...scores), lowest: Math.min(...scores), average: round(scores.reduce((a, b) => a + b, 0) / scores.length), passPercentage: round((rows.filter((r) => r.passed).length / rows.length) * 100) }; }
 async function snapshotTest(id) { await insert("testHistory", { testId: id, snapshot: { test: await getById("tests", id) } }); }
@@ -1258,8 +1257,48 @@ function validatePassword(password) { if (String(password || "").length < 8) thr
 
 async function ensureAttemptAccess(id, user, body = {}) { const attempt = await getById("attempts", id); if (!attempt) throw statusError(404, "Attempt not found."); if (attempt.studentUserId && (!user || attempt.studentUserId !== user.id)) throw statusError(403, "Access denied."); if (!attempt.studentUserId && attempt.guestKey && body.guestKey !== attempt.guestKey) throw statusError(403, "Access denied."); return attempt; }
 function ensureResultAccess(result, user) { if (!result) throw statusError(404, "Result not found."); if (user?.role === "SUPER_ADMIN") return; if (user?.role === "TEACHER" && result.teacher_id === user.id) return; if (result.studentUserId && user?.id === result.studentUserId) return; if (!result.studentUserId) return; throw statusError(403, "Access denied."); }
-function canSeeDetailedResult(result, user) { if (!result) return false; if (user?.role === "SUPER_ADMIN") return true; if (user?.role === "TEACHER" && result.teacher_id === user.id) return true; if (result.test_status && result.test_status !== "PUBLISHED") return true; const settings = result.testSettings || {}; if (result.publishedAt || settings.resultRelease === "IMMEDIATE") return true; if (settings.resultRelease === "NEVER" || settings.resultRelease === "AFTER_TEACHER_PUBLISHES") return false; const times = [settings.availabilityEnd, result.due_at].filter(Boolean).map((v) => new Date(v).getTime()).filter(Number.isFinite); return !times.length || Date.now() >= Math.max(...times); }
-function studentVisibleResult(result, user) { if (!result) return result; const detailed = canSeeDetailedResult(result, user); const unlockAt = result.testSettings?.availabilityEnd || result.due_at || null; if (detailed) return { ...result, detailsAvailable: true, lockedUntil: null }; return { id: result.id, testId: result.testId, test_id: result.testId, attemptId: result.attemptId, attempt_id: result.attemptId, studentUserId: result.studentUserId, score: result.score, totalMarks: result.totalMarks, total_marks: result.totalMarks, percentage: result.percentage, passed: !!result.passed, grade: result.grade, studentName: result.studentName, testTitle: result.testTitle, detailsAvailable: false, lockedUntil: unlockAt, lockedMessage: "Detailed result, rank, answers and certificate will be available after the test ends." }; }
+function canSeeDetailedResult(result, user) {
+  if (!result) return false;
+  if (user?.role === "SUPER_ADMIN") return true;
+  if (user?.role === "TEACHER" && result.teacher_id === user.id) return true;
+  if (result.test_status && result.test_status !== "PUBLISHED") return true;
+  const settings = result.testSettings || {};
+  if (result.publishedAt || settings.resultRelease === "IMMEDIATE") return true;
+  if (settings.resultRelease === "NEVER" || settings.resultRelease === "AFTER_TEACHER_PUBLISHES") return false;
+  const times = [settings.availabilityEnd, result.due_at].filter(Boolean).map((v) => new Date(v).getTime()).filter(Number.isFinite);
+  return !times.length || Date.now() >= Math.max(...times);
+}
+function lockedResultMessage(result) {
+  const mode = result?.testSettings?.resultRelease;
+  if (mode === "AFTER_TEACHER_PUBLISHES" || mode === "NEVER") return "Detailed result, rank, answer review and certificate will unlock when the teacher releases the result.";
+  const unlockAt = result?.testSettings?.availabilityEnd || result?.due_at || null;
+  return `Detailed result, rank, answer review and certificate will unlock after the test ends${unlockAt ? ` (${formatUnlockDateTime(unlockAt)})` : ""}.`;
+}
+function studentVisibleResult(result, user) {
+  if (!result) return result;
+  const detailed = canSeeDetailedResult(result, user);
+  const unlockAt = result.testSettings?.availabilityEnd || result.due_at || null;
+  if (detailed) return { ...result, detailsAvailable: true, lockedUntil: null };
+  return {
+    id: result.id,
+    testId: result.testId,
+    test_id: result.testId,
+    attemptId: result.attemptId,
+    attempt_id: result.attemptId,
+    studentUserId: result.studentUserId,
+    score: result.score,
+    totalMarks: result.totalMarks,
+    total_marks: result.totalMarks,
+    percentage: result.percentage,
+    passed: !!result.passed,
+    grade: result.grade,
+    studentName: result.studentName,
+    testTitle: result.testTitle,
+    detailsAvailable: false,
+    lockedUntil: unlockAt,
+    lockedMessage: lockedResultMessage(result)
+  };
+}
 
 function compareRank(a, b, breakers) { if (Number(b.score) !== Number(a.score)) return Number(b.score) - Number(a.score); for (const br of breakers) { if (br === "accuracy" && Number(b.accuracy) !== Number(a.accuracy)) return Number(b.accuracy) - Number(a.accuracy); if (br === "correct" && Number(b.correct) !== Number(a.correct)) return Number(b.correct) - Number(a.correct); if (br === "negativeMarks" && Number(a.wrong) !== Number(b.wrong)) return Number(a.wrong) - Number(b.wrong); if (br === "timeTaken" && Number(a.timeTaken) !== Number(b.timeTaken)) return Number(a.timeTaken) - Number(b.timeTaken); } return 0; }
 async function bumpQuestionUsage(teacherId, ids) { if (ids.length) await col("questions").updateMany({ _id: { $in: ids.map(oid) }, teacherId }, { $inc: { usageCount: 1 } }); }
@@ -1374,11 +1413,88 @@ function certificatePdfBuffer(cert, result) {
   ]);
 }
 
+function resultPdfBuffer(result, detailed) {
+  const template = result.testSettings?.resultTemplate || {};
+  const issuer = template.issuerName || "TestSetu";
+  const headline = template.headline || (detailed ? "Performance Report" : "Score Card");
+  const organization = template.organization || "Verified Online Assessment";
+  const accent = hexToPdfRgb(template.color || "#4051d6");
+  const soft = mixPdfRgb(accent, [1, 1, 1], 0.86);
+  const pageW = 842, pageH = 595;
+  const score = `${result.score}/${result.totalMarks}`;
+  const status = result.passed ? "Passed" : "Needs Improvement";
+  const streamLines = [
+    "q",
+    `${soft.join(" ")} rg 0 0 842 595 re f`,
+    "1 1 1 rg 40 38 762 519 re f",
+    `${accent.join(" ")} rg 40 520 762 37 re f`,
+    `${accent.join(" ")} RG 2 w 40 38 762 519 re S`,
+    "1 1 1 rg",
+    textAt(issuer.toUpperCase(), 64, 532, 18, "F2", "left"),
+    textAt(organization.toUpperCase(), 778, 532, 10, "F2", "right"),
+    "0.07 0.09 0.15 rg",
+    textAt(headline.toUpperCase(), 421, 478, 28, "F2", "center"),
+    textAt(result.studentName || "Student", 421, 430, 34, "F2", "center"),
+    "0.39 0.44 0.53 rg",
+    textAt(result.testTitle || "Completed Test", 421, 402, 15, "F1", "center"),
+    `${soft.join(" ")} rg 86 306 188 72 re f 326 306 124 72 re f 482 306 124 72 re f 638 306 118 72 re f`,
+    `${accent.join(" ")} RG 1.4 w 86 306 188 72 re S 326 306 124 72 re S 482 306 124 72 re S 638 306 118 72 re S`,
+    `${accent.join(" ")} rg`,
+    textAt(`${result.percentage || 0}%`, 180, 340, 28, "F2", "center"),
+    "0.07 0.09 0.15 rg",
+    textAt(score, 388, 340, 20, "F2", "center"),
+    textAt(result.grade || "-", 544, 340, 20, "F2", "center"),
+    textAt(detailed ? (result.rankLabel || "Rank pending") : "Locked", 697, 340, 15, "F2", "center"),
+    "0.39 0.44 0.53 rg",
+    textAt(status, 180, 320, 10, "F2", "center"),
+    textAt("Score", 388, 320, 10, "F2", "center"),
+    textAt("Grade", 544, 320, 10, "F2", "center"),
+    textAt(detailed ? "Rank" : "Detailed Result", 697, 320, 10, "F2", "center"),
+    "0.07 0.09 0.15 rg",
+    ...(detailed ? [
+      textAt(`Correct: ${result.correct ?? "-"}`, 142, 248, 13, "F2", "left"),
+      textAt(`Wrong: ${result.wrong ?? "-"}`, 314, 248, 13, "F2", "left"),
+      textAt(`Unattempted: ${result.unattempted ?? "-"}`, 468, 248, 13, "F2", "left"),
+      textAt(`Time: ${formatPdfTime(result.timeTaken || 0)}`, 652, 248, 13, "F2", "left"),
+      "0.86 0.90 0.96 RG 1 w 86 222 m 756 222 l S",
+      textAt("Generated from verified TestSetu records.", 421, 178, 12, "F1", "center")
+    ] : [
+      textAt(lockedResultMessage(result), 421, 232, 12, "F1", "center")
+    ]),
+    "0.39 0.44 0.53 rg",
+    textAt(`Issued: ${formatPdfDate(new Date())}`, 86, 94, 11, "F1", "left"),
+    textAt("Teacher / Authorized Signatory", 756, 94, 11, "F1", "right"),
+    `${accent.join(" ")} RG 1 w 576 116 m 756 116 l S`,
+    "Q"
+  ];
+  return pdfFromContent(pageW, pageH, streamLines.join("\n"), [
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+  ]);
+}
+
 function textAt(value, x, y, size, font = "F1", align = "left") {
   const text = String(value || "").replace(/[\\()]/g, "\\$&").slice(0, 110);
   const width = text.length * size * 0.28;
   const tx = align === "center" ? x - width : align === "right" ? x - width * 2 : x;
   return `BT /${font} ${size} Tf ${roundPdf(tx)} ${y} Td (${text}) Tj ET`;
+}
+
+function hexToPdfRgb(value) {
+  const hex = String(value || "").replace("#", "");
+  if (!/^[a-f0-9]{6}$/i.test(hex)) return [0.25, 0.32, 0.84];
+  return [0, 2, 4].map((i) => roundPdf(parseInt(hex.slice(i, i + 2), 16) / 255));
+}
+
+function mixPdfRgb(a, b, amount) {
+  return a.map((v, i) => roundPdf(v * (1 - amount) + b[i] * amount));
+}
+
+function formatPdfTime(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds || 0)));
+  const m = Math.floor(value / 60);
+  const s = value % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 function pdfFromContent(pageW, pageH, stream, fonts) {
@@ -1406,6 +1522,10 @@ function finishPdf(objects, catalog) {
 
 function formatPdfDate(value) {
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function formatUnlockDateTime(value) {
+  return new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
 }
 
 function roundPdf(value) {
