@@ -1086,6 +1086,7 @@ function CertificateDesignEditor({ form, setForm, totalMarks }: any) {
   const template = form.settings.certificate.template || {};
   const setTemplate = (patch: any) => setForm({ ...form, settings: { ...form.settings, certificate: { ...form.settings.certificate, template: { ...template, ...patch } } } });
   const preview = {
+    template,
     certificate_id: "TS-PREVIEW",
     student_name: "Abhinav Yadav",
     test_title: form.title || "Sample Test",
@@ -1121,11 +1122,12 @@ function CertificateDesignEditor({ form, setForm, totalMarks }: any) {
 function ProfessionalCertificate({ certificate, qr, compact = false }: any) {
   const template = certificate.template || certificate.test?.settings?.certificate?.template || {};
   const color = template.color || "#c79a2b";
+  const styleName = String(template.style || "DigiCoders").toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return (
-    <article className={compact ? "proCertificate compact" : "proCertificate"} style={{ "--cert-accent": color } as any}>
+    <article className={`proCertificate style-${styleName}${compact ? " compact" : ""}`} style={{ "--cert-accent": color } as any}>
       <div className="certCorner tl" /><div className="certCorner tr" /><div className="certCorner bl" /><div className="certCorner br" />
       <header>
-        <b>{template.issuerName || certificate.organization_name || certificate.teacher_name || "TestSetu"}</b>
+        <b>{template.issuerName || certificate.teacher_name || certificate.organization_name || "TestSetu"}</b>
         <span>{template.organization || certificate.organization_name || "Verified Online Assessment"}</span>
       </header>
       <h2>{template.headline || "Certificate of Achievement"}</h2>
