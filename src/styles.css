@@ -175,6 +175,8 @@ th { background: #f8fafc; color: #475569; text-transform: capitalize; }
 .cardActions > * { flex: 1 1 96px; }
 .formError { background: var(--rose); color: var(--error); border: 1px solid #fecdd3; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-weight: 800; }
 .notice { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.activeAttemptsPanel { width: 100%; display: grid; gap: 10px; margin: 14px 0; }
+.activeAttemptsPanel h3 { margin: 0; color: var(--ink); }
 .optionEditor { display: grid; gap: 10px; }
 .settingsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .infraGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }

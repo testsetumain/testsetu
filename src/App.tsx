@@ -453,7 +453,7 @@ function TeacherDashboard({ token, user, notify }: any) {
       const data = await api(`/teacher/tests/${id}/results/release`, { method: "POST", token });
       setSelectedResults(data);
       await load();
-      notify("Results released for students.");
+      notify(data.heldActiveAttempts ? `Results released. ${data.heldActiveAttempts} active attempt(s) are still running.` : "Results released for students.");
     } catch (error: any) {
       notify(error.message || "Result release failed.");
     } finally {
@@ -482,6 +482,7 @@ function TeacherDashboard({ token, user, notify }: any) {
             ["Published", dashboard.stats?.published, "green", <CheckCircle2 />],
             ["Questions", dashboard.stats?.questions, "amber", <FileQuestion />],
             ["Submissions", dashboard.stats?.submissions, "purple", <Send />],
+            ["Active now", dashboard.stats?.activeAttempts, "amber", <Timer />],
             ["Certificates", dashboard.stats?.certificates, "purple", <Award />],
             ["Objections", dashboard.stats?.objections, "red", <Bell />]
           ]} />
@@ -1114,7 +1115,11 @@ function ResultsPanel({ data, tests, loadResults, releaseResults, actionId = "",
     <>
       <Section title="Choose Test">{tests.map((t: any) => <button className="secondaryBtn" key={t.id} onClick={() => loadResults(t.id)}>{t.title}</button>)}</Section>
       {data && <Section title={`Results: ${data.test.title}`} action={<div className="rowActions"><button className="successBtn" disabled={releasing} onClick={() => releaseResults(data.test.id)}>{releasing ? "Releasing..." : "Release Result"}</button><button className="secondaryBtn" onClick={() => downloadFile(`/teacher/exports/results/${data.test.id}.csv`, `testsetu-results-${data.test.id}.csv`, token)}>CSV</button></div>}>
-        <StatsGrid stats={[["Highest", data.summary.highest, "green", <Medal />], ["Average", data.summary.average, "blue", <ClipboardList />], ["Pass %", `${data.summary.passPercentage}%`, "purple", <CheckCircle2 />]]} />
+        <StatsGrid stats={[["Highest", data.summary.highest, "green", <Medal />], ["Average", data.summary.average, "blue", <ClipboardList />], ["Pass %", `${data.summary.passPercentage}%`, "purple", <CheckCircle2 />], ["Active", data.summary.activeAttempts || 0, "amber", <Timer />]]} />
+        {!!data.activeAttempts?.length && <div className="activeAttemptsPanel">
+          <h3>Students still taking this test</h3>
+          <DataTable rows={data.activeAttempts} columns={["studentName", "started_at", "due_at", "time_left", "answers_saved"]} />
+        </div>}
         <DataTable rows={data.results} columns={["studentName", "score", "total_marks", "percentage", "grade", "rank_label", "passed"]} actions={(r: any) => <><button className="secondaryBtn" onClick={() => setActiveResult(r)}>Details</button><a className="secondaryBtn" href={`#result/${r.id}`}>Open</a><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/pdf`, `result-${r.id}.pdf`, token)}>Result PDF</button><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/answer-review.pdf`, `answer-review-${r.id}.pdf`, token)}>Review PDF</button></>} />
       </Section>}
       {activeResult && <Section title={`Detailed Result: ${activeResult.studentName}`} action={<button className="secondaryBtn" onClick={() => setActiveResult(null)}>Close</button>}><ResultCard result={activeResult} token={token} /></Section>}
@@ -1161,6 +1166,7 @@ function TestCards({ tests, publish, results, releaseResults, publishingId, acti
             <div className="testMetaLine">
               <span className={`status ${life.tone}`}>{life.label}</span>
               <span><Timer size={14} /> {life.time}</span>
+              {!!t.activeAttemptCount && <span><Users size={14} /> {t.activeAttemptCount} active{t.activeTimeLeftLabel ? ` | ${t.activeTimeLeftLabel} left` : ""}</span>}
             </div>
             <div className="shareLine">
               <code title={`${location.origin}/#test/${t.shareSlug}`}>{location.origin}/#test/{t.shareSlug}</code>

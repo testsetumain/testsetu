@@ -447,10 +447,11 @@ async function teacherDashboard(res, user) {
       published: teacherTests.filter((t) => t.status === "PUBLISHED").length,
       questions: await count("questions", { teacherId: user.id, archived: false }),
       submissions: await count("attempts", { status: "SUBMITTED", testId: { $in: testIds } }),
+      activeAttempts: await count("attempts", { status: "IN_PROGRESS", testId: { $in: testIds } }),
       certificates: await count("certificates", { testId: { $in: testIds } }),
       objections: await count("objections", { status: "OPEN", testId: { $in: testIds } })
     },
-    recentTests: teacherTests.sort(sortByCreatedDesc).slice(0, 6).map(parseTest),
+    recentTests: await Promise.all(teacherTests.sort(sortByCreatedDesc).slice(0, 6).map((test) => hydrateTeacherTestSummary(test))),
     recentResults: await listRecentTeacherResults(user.id)
   });
 }
@@ -487,7 +488,8 @@ async function archiveQuestion(res, user, id) {
 }
 
 async function listTeacherTests(res, user) {
-  return send(res, 200, { tests: (await findMany("tests", { teacherId: user.id, archived: false }, { sort: { createdAt: -1 } })).map(parseTest) });
+  const tests = await findMany("tests", { teacherId: user.id, archived: false }, { sort: { createdAt: -1 } });
+  return send(res, 200, { tests: await Promise.all(tests.map((test) => hydrateTeacherTestSummary(test))) });
 }
 
 async function saveTest(req, res, user) {
@@ -591,7 +593,7 @@ async function deleteTest(res, user, id) {
 async function getFullTestForTeacher(id, teacherId) {
   const test = await col("tests").findOne({ _id: oid(id), teacherId });
   if (!test) throw statusError(404, "Test not found.");
-  const parsed = parseTest(test);
+  const parsed = await hydrateTeacherTestSummary(test);
   parsed.questions = (await findMany("questions", { _id: { $in: (test.questionIds || []).map(oid) } })).sort(orderByIds(test.questionIds || [])).map(parseQuestion);
   return parsed;
 }
@@ -803,21 +805,23 @@ async function maybeIssueCertificate(result) {
 async function teacherResults(res, user, testId) {
   await ensureOwnTest(user.id, testId);
   const rows = await Promise.all((await findMany("results", { testId })).map(hydrateResultRow));
+  const activeAttempts = await activeAttemptsForTest(testId);
   rows.sort((a, b) => (a.rank || 999999) - (b.rank || 999999) || b.score - a.score);
-  return send(res, 200, { test: parseTest(await getById("tests", testId)), results: rows, summary: resultSummary(rows) });
+  return send(res, 200, { test: await hydrateTeacherTestSummary(await getById("tests", testId)), results: rows, activeAttempts, summary: { ...resultSummary(rows), activeAttempts: activeAttempts.length } });
 }
 
 async function releaseTestResults(res, user, testId) {
   await ensureOwnTest(user.id, testId);
   const now = new Date();
-  await updateOne("tests", { _id: oid(testId), teacherId: user.id }, { $set: { "settings.resultRelease": "IMMEDIATE", updatedAt: now } });
+  const activeAttempts = await activeAttemptsForTest(testId);
+  await updateOne("tests", { _id: oid(testId), teacherId: user.id }, { $set: { "settings.resultRelease": "IMMEDIATE", "settings.availabilityEnd": now.toISOString(), resultsReleasedAt: now, updatedAt: now } });
   await col("results").updateMany({ testId }, { $set: { publishedAt: now, updatedAt: now } });
   const rows = await Promise.all((await findMany("results", { testId })).map(hydrateResultRow));
   await Promise.all(rows.map((result) => maybeIssueCertificate(result)));
-  await notifyTestStudents(testId, "Result released", "Your detailed result and certificate are now available.", "SUCCESS");
-  await audit(user.id, "RELEASE_RESULTS", "Test", testId, { results: rows.length });
+  await notifyResultStudents(rows, "Result released", "Your detailed result and certificate are now available.", "SUCCESS");
+  await audit(user.id, "RELEASE_RESULTS", "Test", testId, { results: rows.length, activeAttempts: activeAttempts.length });
   rows.sort((a, b) => (a.rank || 999999) - (b.rank || 999999) || b.score - a.score);
-  return send(res, 200, { test: parseTest(await getById("tests", testId)), results: rows, summary: resultSummary(rows), released: true });
+  return send(res, 200, { test: await hydrateTeacherTestSummary(await getById("tests", testId)), results: rows, activeAttempts, summary: { ...resultSummary(rows), activeAttempts: activeAttempts.length }, released: true, heldActiveAttempts: activeAttempts.length });
 }
 
 async function teacherStudents(res, user) {
@@ -1122,6 +1126,37 @@ function hydrateAttempt(attempt) {
   return { ...attempt, started_at: attempt.startedAt, submitted_at: attempt.submittedAt, due_at: attempt.dueAt, time_taken: attempt.timeTaken };
 }
 
+async function hydrateTeacherTestSummary(test) {
+  const parsed = parseTest(test);
+  const activeAttempts = await activeAttemptsForTest(parsed.id);
+  parsed.activeAttempts = activeAttempts;
+  parsed.activeAttemptCount = activeAttempts.length;
+  parsed.activeTimeLeft = activeAttempts.length ? activeAttempts.map((a) => a.time_left_seconds).filter(Number.isFinite).sort((a, b) => a - b)[0] ?? null : null;
+  parsed.activeTimeLeftLabel = parsed.activeTimeLeft === null ? (activeAttempts.length ? "No limit" : "") : formatDurationLabel(parsed.activeTimeLeft);
+  return parsed;
+}
+
+async function activeAttemptsForTest(testId) {
+  const attempts = await findMany("attempts", { testId, status: "IN_PROGRESS" }, { sort: { startedAt: 1 } });
+  return Promise.all(attempts.map(async (attempt) => {
+    const user = attempt.studentUserId ? await getById("users", attempt.studentUserId) : null;
+    const identity = attempt.studentIdentityId ? await getById("studentIdentities", attempt.studentIdentityId) : null;
+    const dueAt = attempt.dueAt || null;
+    const dueTime = scheduleTimeMs(dueAt);
+    const timeLeft = dueTime ? Math.max(0, Math.round((dueTime - Date.now()) / 1000)) : null;
+    return {
+      id: attempt.id,
+      studentName: user?.name || attempt.details?.fullName || attempt.details?.name || identity?.displayId || "Guest student",
+      display_id: identity?.displayId || "",
+      started_at: attempt.startedAt,
+      due_at: dueAt,
+      time_left_seconds: timeLeft,
+      time_left: timeLeft === null ? "No limit" : formatDurationLabel(timeLeft),
+      answers_saved: Object.keys(attempt.answers || {}).length
+    };
+  }));
+}
+
 function hydrateStudentIdentity(identity) {
   return { ...identity, display_id: identity.displayId, expires_at: identity.expiresAt, created_at: identity.createdAt };
 }
@@ -1313,6 +1348,13 @@ function studentName(attempt) { return attempt.details?.fullName || attempt.deta
 function randomPassword() { return crypto.randomBytes(6).toString("base64url"); }
 function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 function round(n) { return Math.round(Number(n) * 100) / 100; }
+function formatDurationLabel(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds || 0)));
+  const h = Math.floor(value / 3600);
+  const m = Math.floor((value % 3600) / 60);
+  const s = value % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 function scheduleTimeMs(value) {
   if (!value) return null;
   if (value instanceof Date) return value.getTime();
@@ -1391,6 +1433,7 @@ async function countSuperAdmins() { return count("users", { role: "SUPER_ADMIN" 
 async function audit(actorId, action, entityType, entityId, details = {}) { await insert("auditLogs", { actorId, action, entityType, entityId: String(entityId || ""), details }); }
 async function notifyAdmins(title, body, type) { const admins = await findMany("users", { role: "SUPER_ADMIN", status: "ACTIVE" }); await Promise.all(admins.map((admin) => insert("notifications", { userId: admin.id, title, body, type, readAt: null }))); }
 async function notifyTestStudents(testId, title, body, type) { const attempts = await findMany("attempts", { testId, studentUserId: { $ne: null } }); const ids = [...new Set(attempts.map((a) => a.studentUserId))]; await Promise.all(ids.map((id) => insert("notifications", { userId: id, title, body, type, readAt: null }))); }
+async function notifyResultStudents(results, title, body, type) { const ids = [...new Set(results.map((r) => r.studentUserId).filter(Boolean))]; await Promise.all(ids.map((id) => insert("notifications", { userId: id, title, body, type, readAt: null }))); }
 function idFrom(pathName, index) { return decodeURIComponent(pathName.split("/")[index]); }
 
 function certificatePdfBuffer(cert, result) {
