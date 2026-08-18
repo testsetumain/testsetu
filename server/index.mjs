@@ -392,6 +392,7 @@ async function register(req, res) {
     await notifyAdmins("Teacher verification pending", `${body.name || body.email} registered as a teacher.`, "WARNING");
   } else {
     await insert("studentProfiles", { userId: user.id, fullName: body.name || "", rollNumber: body.rollNumber || "", className: body.className || "", section: body.section || "", mobile: body.mobile || "", fields: {} });
+    await linkPastStudentRecords(user);
   }
   await audit(user.id, "REGISTER", "User", user.id, { role });
   return send(res, 201, { user: cleanUser(user), token: signToken(user.id) });
@@ -404,6 +405,7 @@ async function login(req, res) {
   const user = toPublic(userDoc);
   if (["BLOCKED", "DEACTIVATED", "REJECTED"].includes(user.status)) return send(res, 403, { error: `Account is ${user.status.toLowerCase()}.` });
   if (user.role === "TEACHER" && user.status !== "ACTIVE") return send(res, 403, { error: "Teacher account is pending Super Admin approval." });
+  if (user.role === "STUDENT") await linkPastStudentRecords(user);
   await audit(user.id, "LOGIN", "User", user.id);
   return send(res, 200, { user: cleanUser(user), token: signToken(user.id) });
 }
@@ -660,7 +662,7 @@ async function startAttempt(req, res, slug, user) {
     const identity = await col("studentIdentities").findOne({ displayId: b.tempUserId, status: "ACTIVE" });
     if (!identity || !(await verifyPassword(b.tempPassword || "", identity.tempPasswordHash || ""))) return send(res, 401, { error: "Invalid temporary identity." });
     identityId = String(identity._id);
-  } else if (guestAllowed) {
+  } else if (guestAllowed && !user) {
     studentUserId = null;
     guestKey = crypto.randomBytes(16).toString("base64url");
   } else if (!user) guestKey = crypto.randomBytes(16).toString("base64url");
@@ -1014,6 +1016,7 @@ async function markNotification(res, user, id) {
 }
 
 async function studentDashboard(res, user) {
+  await linkPastStudentRecords(user);
   const results = (await Promise.all((await findMany("results", { studentUserId: user.id }, { sort: { createdAt: -1 } })).map(hydrateResultRow))).map((r) => studentVisibleResult(r, user));
   const certs = [];
   for (const c of await findMany("certificates", {}, { sort: { createdAt: -1 } })) {
@@ -1262,6 +1265,30 @@ async function countAttemptsForStart(test, context) {
   if (context.studentUserId) return count("attempts", { testId: test.id, studentUserId: context.studentUserId, isPractice: false });
   return 0;
 }
+async function linkPastStudentRecords(user) {
+  if (!user || user.role !== "STUDENT") return { attempts: 0, results: 0 };
+  const profile = await col("studentProfiles").findOne({ userId: user.id }) || {};
+  const matchFilters = studentAccountMatchFilters(user, profile);
+  if (!matchFilters.length) return { attempts: 0, results: 0 };
+  const orphanGuestFilter = {
+    $and: [
+      { $or: [{ studentUserId: null }, { studentUserId: { $exists: false } }] },
+      { $or: [{ studentIdentityId: null }, { studentIdentityId: { $exists: false } }] },
+      { $or: matchFilters }
+    ]
+  };
+  const matches = await col("attempts").find(orphanGuestFilter, { projection: { _id: 1 } }).toArray();
+  if (!matches.length) return { attempts: 0, results: 0 };
+  const now = new Date();
+  const attemptIds = matches.map((attempt) => String(attempt._id));
+  await col("attempts").updateMany({ _id: { $in: matches.map((attempt) => attempt._id) } }, { $set: { studentUserId: user.id, updatedAt: now } });
+  const resultUpdate = await col("results").updateMany({
+    attemptId: { $in: attemptIds },
+    $or: [{ studentUserId: null }, { studentUserId: { $exists: false } }]
+  }, { $set: { studentUserId: user.id, updatedAt: now } });
+  await audit(user.id, "LINK_PAST_STUDENT_RECORDS", "User", user.id, { attempts: matches.length, results: resultUpdate.modifiedCount || 0 });
+  return { attempts: matches.length, results: resultUpdate.modifiedCount || 0 };
+}
 function studentAttemptFingerprint(details = {}) {
   const keys = ["email", "rollNumber", "fullName", "name", "className", "section"];
   const parts = keys.map((key) => String(details[key] || "").trim().toLowerCase()).filter(Boolean);
@@ -1273,6 +1300,29 @@ function studentDetailMatchFilters(details = {}) {
     const value = String(details[key] || "").trim();
     return value ? { [`details.${key}`]: value } : null;
   }).filter(Boolean);
+}
+function studentAccountMatchFilters(user, profile = {}) {
+  const filters = [];
+  for (const email of uniqueCleanValues(user.email)) filters.push(exactDetailFilter("email", email));
+  for (const roll of uniqueCleanValues(profile.rollNumber, profile.fields?.rollNumber)) filters.push(exactDetailFilter("rollNumber", roll));
+  const nameFilters = uniqueCleanValues(user.name, profile.fullName, profile.fields?.fullName, profile.fields?.name).flatMap((name) => [exactDetailFilter("fullName", name), exactDetailFilter("name", name)]);
+  const contextFilters = uniqueCleanValues(profile.className, profile.fields?.className, profile.section, profile.fields?.section).flatMap((value) => [exactDetailFilter("className", value), exactDetailFilter("section", value)]);
+  if (nameFilters.length && contextFilters.length) filters.push({ $and: [{ $or: nameFilters }, { $or: contextFilters }] });
+  else filters.push(...nameFilters);
+  return filters.filter(Boolean);
+}
+function exactDetailFilter(key, value) {
+  const text = String(value || "").trim();
+  return text ? { [`details.${key}`]: new RegExp(`^${escapeRegExp(text)}$`, "i") } : null;
+}
+function uniqueCleanValues(...values) {
+  const seen = new Set();
+  return values.flat().map((value) => String(value || "").trim()).filter((value) => {
+    const key = value.toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 function requiresManual(q) { return ["LONG_ANSWER", "SHORT_ANSWER"].includes(q.type) && !q.correct.length; }
 function isCorrect(q, value) { const answerValue = normalizeAnswerValue(value); const correct = q.correct.map((v) => String(v).trim().toLowerCase()); if (q.type === "MULTIPLE_CORRECT") return JSON.stringify((Array.isArray(answerValue) ? answerValue : []).map((v) => String(v).trim().toLowerCase()).sort()) === JSON.stringify([...correct].sort()); if (q.type === "NUMERICAL") return correct.some((c) => Math.abs(Number(c) - Number(answerValue)) < 0.00001); return correct.includes(String(answerValue).trim().toLowerCase()); }
