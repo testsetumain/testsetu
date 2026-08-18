@@ -635,18 +635,24 @@ async function startAttempt(req, res, slug, user) {
   if (test.accessCode && test.accessCode !== b.accessCode) return send(res, 403, { error: "Invalid access code." });
   if ((test.accessMode === "LOGIN_REQUIRED" || test.accessMode === "EXISTING_ACCOUNT_ONLY") && !user) return send(res, 401, { error: "Login is required for this test." });
   const details = validateStudentDetails(test.studentFields, b.details || {});
+  const guestAllowed = test.accessMode === "GUEST_ALLOWED";
+  const studentFingerprint = guestAllowed ? studentAttemptFingerprint(details) : "";
   let identityId = null;
   let guestKey = null;
+  let studentUserId = user?.id || null;
   if (test.accessMode === "TEMPORARY_LOGIN") {
     const identity = await col("studentIdentities").findOne({ displayId: b.tempUserId, status: "ACTIVE" });
     if (!identity || !(await verifyPassword(b.tempPassword || "", identity.tempPasswordHash || ""))) return send(res, 401, { error: "Invalid temporary identity." });
     identityId = String(identity._id);
+  } else if (guestAllowed) {
+    studentUserId = null;
+    guestKey = crypto.randomBytes(16).toString("base64url");
   } else if (!user) guestKey = crypto.randomBytes(16).toString("base64url");
-  const attempts = user ? await count("attempts", { testId: test.id, studentUserId: user.id, isPractice: false }) : 0;
-  if (user && attempts >= Number(test.settings.maxAttempts || 1)) return send(res, 400, { error: "Maximum attempts reached." });
+  const attempts = await countAttemptsForStart(test, { user, studentUserId, identityId, studentFingerprint, details, isPractice: !!b.isPractice });
+  if (!b.isPractice && attempts >= Number(test.settings.maxAttempts || 1)) return send(res, 400, { error: "Maximum attempts reached for these student details." });
   const now = new Date();
   const duration = Number(test.settings.durationMinutes || 0);
-  const attempt = await insert("attempts", { testId: test.id, studentUserId: user?.id || null, studentIdentityId: identityId, guestKey, details, status: "IN_PROGRESS", startedAt: now, dueAt: duration ? new Date(now.getTime() + duration * 60_000) : null, timeTaken: 0, answers: {}, isPractice: !!b.isPractice });
+  const attempt = await insert("attempts", { testId: test.id, studentUserId, studentIdentityId: identityId, studentFingerprint, guestKey, details, status: "IN_PROGRESS", startedAt: now, dueAt: duration ? new Date(now.getTime() + duration * 60_000) : null, timeTaken: 0, answers: {}, isPractice: !!b.isPractice });
   await audit(user?.id || null, "START_ATTEMPT", "Attempt", attempt.id, { testId: test.id });
   return send(res, 201, { attempt: hydrateAttempt(attempt), guestKey });
 }
@@ -1166,6 +1172,28 @@ function validateStudentDetails(fields, details) {
   return clean;
 }
 function ensureTestCanStart(test) { const now = Date.now(); if (test.settings.availabilityStart && new Date(test.settings.availabilityStart).getTime() > now) throw statusError(400, "Test has not started yet."); if (test.settings.availabilityEnd && new Date(test.settings.availabilityEnd).getTime() < now) throw statusError(400, "Test is closed for new students."); }
+async function countAttemptsForStart(test, context) {
+  if (context.isPractice) return 0;
+  if (test.accessMode === "GUEST_ALLOWED") {
+    const legacyFilters = studentDetailMatchFilters(context.details);
+    return count("attempts", { testId: test.id, isPractice: false, $or: [{ studentFingerprint: context.studentFingerprint }, ...legacyFilters] });
+  }
+  if (context.identityId) return count("attempts", { testId: test.id, studentIdentityId: context.identityId, isPractice: false });
+  if (context.studentUserId) return count("attempts", { testId: test.id, studentUserId: context.studentUserId, isPractice: false });
+  return 0;
+}
+function studentAttemptFingerprint(details = {}) {
+  const keys = ["email", "rollNumber", "fullName", "name", "className", "section"];
+  const parts = keys.map((key) => String(details[key] || "").trim().toLowerCase()).filter(Boolean);
+  return crypto.createHash("sha256").update(parts.join("|") || "anonymous").digest("hex");
+}
+function studentDetailMatchFilters(details = {}) {
+  const keys = ["email", "rollNumber", "fullName", "name"];
+  return keys.map((key) => {
+    const value = String(details[key] || "").trim();
+    return value ? { [`details.${key}`]: value } : null;
+  }).filter(Boolean);
+}
 function requiresManual(q) { return ["LONG_ANSWER", "SHORT_ANSWER"].includes(q.type) && !q.correct.length; }
 function isCorrect(q, value) { const answerValue = normalizeAnswerValue(value); const correct = q.correct.map((v) => String(v).trim().toLowerCase()); if (q.type === "MULTIPLE_CORRECT") return JSON.stringify((Array.isArray(answerValue) ? answerValue : []).map((v) => String(v).trim().toLowerCase()).sort()) === JSON.stringify([...correct].sort()); if (q.type === "NUMERICAL") return correct.some((c) => Math.abs(Number(c) - Number(answerValue)) < 0.00001); return correct.includes(String(answerValue).trim().toLowerCase()); }
 function resultVisibleNow(test) { return test.settings.resultRelease === "IMMEDIATE"; }

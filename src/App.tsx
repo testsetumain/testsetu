@@ -449,6 +449,7 @@ function TeacherDashboard({ token, user, notify }: any) {
   };
   const nav = [
     ["overview", LayoutDashboard],
+    ["studio", Sparkles],
     ["builder", Plus],
     ["questions", FileQuestion],
     ["tests", ClipboardList],
@@ -474,6 +475,7 @@ function TeacherDashboard({ token, user, notify }: any) {
           <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
         </>
       )}
+      {tab === "studio" && <ExamStudio token={token} questions={questions} onRefresh={load} notify={notify} />}
       {tab === "builder" && <TestBuilder token={token} questions={questions} editingTest={editingTest} onCancelEdit={() => setEditingTest(null)} onSaved={() => { notify(editingTest ? "Test updated." : "Test saved."); setEditingTest(null); load(); }} />}
       {tab === "questions" && <QuestionBank token={token} questions={questions} onSaved={() => { notify("Question saved."); load(); }} />}
       {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
@@ -482,6 +484,69 @@ function TeacherDashboard({ token, user, notify }: any) {
       {tab === "objections" && <ObjectionPanel token={token} objections={objections} onRefresh={load} notify={notify} />}
       {tab === "settings" && <TeacherSettings />}
     </DashboardFrame>
+  );
+}
+
+function ExamStudio({ token, questions, onRefresh, notify }: any) {
+  return (
+    <div className="studioGrid">
+      <QuickQuestionComposer token={token} onCreated={async () => { notify("Question added to this exam workspace."); await onRefresh(); }} />
+      <TestBuilder token={token} questions={questions} onSaved={() => { notify("Exam saved."); onRefresh(); }} />
+    </div>
+  );
+}
+
+function QuickQuestionComposer({ token, onCreated }: any) {
+  const empty = () => ({ type: "MCQ", text: "", options: ["", "", "", ""], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", allowOther: false });
+  const objectiveTypes = ["MCQ", "TRUE_FALSE", "ASSERTION_REASON", "IMAGE_BASED", "PASSAGE_BASED"];
+  const optionTypes = [...objectiveTypes, "MULTIPLE_CORRECT"];
+  const [form, setForm] = useState<any>(empty());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const setOption = (i: number, v: string) => {
+    const options = [...form.options];
+    options[i] = v;
+    setForm({ ...form, options });
+  };
+  const save = async (e: any) => {
+    e.preventDefault();
+    try {
+      setError("");
+      setSaving(true);
+      await api("/teacher/questions", { method: "POST", token, body: form });
+      setForm(empty());
+      onCreated();
+    } catch (err: any) {
+      setError(err.message || "Question save failed.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Section title="Create Questions Here">
+      <form className="formGrid" onSubmit={save}>
+        {error && <div className="formError">{error}</div>}
+        <Select label="Question type" value={form.type} onChange={(v: string) => setForm({ ...form, type: v, correct: [] })} options={["MCQ", "MULTIPLE_CORRECT", "TRUE_FALSE", "FILL_BLANK", "SHORT_ANSWER", "LONG_ANSWER", "NUMERICAL", "IMAGE_BASED"]} />
+        <TextArea label="Question" value={form.text} onChange={(v: string) => setForm({ ...form, text: v })} />
+        {optionTypes.includes(form.type) && (
+          <div className="optionEditor">
+            {form.options.map((op: string, i: number) => <Field key={i} label={`Option ${i + 1}`} value={op} onChange={(v: string) => setOption(i, v)} />)}
+            <div className="rowActions">
+              <button type="button" className="secondaryBtn" onClick={() => setForm({ ...form, options: [...form.options, ""] })}><Plus size={16} /> Add option</button>
+              <button type="button" className="secondaryBtn" disabled={form.options.length <= 2} onClick={() => setForm({ ...form, options: form.options.slice(0, -1), correct: (form.correct || []).filter((x: string) => form.options.slice(0, -1).includes(x)) })}><Trash2 size={16} /> Remove last</button>
+            </div>
+            {objectiveTypes.includes(form.type) && <Toggle label="Allow Other answer textbox" value={form.allowOther} onChange={(v: boolean) => setForm({ ...form, allowOther: v })} />}
+          </div>
+        )}
+        {objectiveTypes.includes(form.type) && <Select label="Correct option" value={form.correct?.[0] || ""} onChange={(v: string) => setForm({ ...form, correct: v ? [v] : [] })} options={["", ...form.options.filter(Boolean)]} />}
+        {form.type === "MULTIPLE_CORRECT" && <div className="fieldRules">{form.options.filter(Boolean).map((op: string) => <Toggle key={op} label={op} value={(form.correct || []).includes(op)} onChange={(checked: boolean) => setForm({ ...form, correct: checked ? [...(form.correct || []), op] : (form.correct || []).filter((x: string) => x !== op) })} />)}</div>}
+        {!optionTypes.includes(form.type) && <Field label="Correct answer" value={Array.isArray(form.correct) ? form.correct.join(",") : form.correct} onChange={(v: string) => setForm({ ...form, correct: v.split(",").map((x) => x.trim()).filter(Boolean) })} />}
+        <div className="inlineFields"><Field label="Marks" type="number" value={form.marks} onChange={(v: string) => setForm({ ...form, marks: Number(v) })} /><Field label="Negative" type="number" value={form.negativeMarks} onChange={(v: string) => setForm({ ...form, negativeMarks: Number(v) })} /></div>
+        <div className="inlineFields"><Field label="Subject" value={form.subject} onChange={(v: string) => setForm({ ...form, subject: v })} /><Field label="Topic" value={form.topic} onChange={(v: string) => setForm({ ...form, topic: v })} /></div>
+        <TextArea label="Explanation" value={form.explanation} onChange={(v: string) => setForm({ ...form, explanation: v })} />
+        <button className="primaryBtn" disabled={saving}>{saving ? "Saving..." : "Save Question"}</button>
+      </form>
+    </Section>
   );
 }
 

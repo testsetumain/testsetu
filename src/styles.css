@@ -128,6 +128,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .metric.red { background: var(--rose); color: var(--error); }
 
 .twoCol { display: grid; grid-template-columns: .95fr 1.05fr; gap: 18px; align-items: start; }
+.studioGrid { display: grid; grid-template-columns: minmax(320px, .75fr) minmax(0, 1.25fr); gap: 18px; align-items: start; }
 .questionList, .optionStack { display: grid; gap: 12px; }
 .questionCard, .miniCard, .testCardSmall, .studentQuestion, .resultCard, .previewCard {
   border: 1px solid var(--line); background: white; border-radius: 8px; padding: 16px;
@@ -273,7 +274,7 @@ th { background: #f8fafc; color: #475569; text-transform: capitalize; }
 .toast { position: fixed; right: 18px; bottom: 18px; z-index: 20; background: #172033; color: white; padding: 12px 14px; border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.22); font-weight: 800; }
 
 @media (max-width: 980px) {
-  .authStage, .twoCol, .testRun { grid-template-columns: 1fr; }
+  .authStage, .twoCol, .studioGrid, .testRun { grid-template-columns: 1fr; }
   .statsGrid, .heroStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .certificateDesignGrid { grid-template-columns: 1fr; }
   .palette { position: static; grid-template-columns: repeat(8, 1fr); }
