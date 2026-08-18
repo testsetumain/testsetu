@@ -365,6 +365,7 @@ function TeacherDashboard({ token, user, notify }: any) {
   const [publishingId, setPublishingId] = useState<number | null>(null);
   const [editingTest, setEditingTest] = useState<any>(null);
   const [loadError, setLoadError] = useState("");
+  const [testAction, setTestAction] = useState("");
   const load = async () => {
     try {
       setDashboard(await api("/teacher/dashboard", { token }));
@@ -394,22 +395,34 @@ function TeacherDashboard({ token, user, notify }: any) {
   };
   const deleteTest = async (id: number) => {
     if (!confirm("Delete this test and all related attempts, results, certificates and files?")) return;
-    await api(`/teacher/tests/${id}`, { method: "DELETE", token });
-    await load();
-    setSelectedResults(null);
-    notify("Test and related data deleted.");
+    try {
+      setTestAction(`delete-${id}`);
+      await api(`/teacher/tests/${id}`, { method: "DELETE", token });
+      await load();
+      setSelectedResults(null);
+      notify("Test and related data deleted.");
+    } catch (error: any) {
+      notify(error.message || "Delete failed.");
+    } finally {
+      setTestAction("");
+    }
   };
   const editTest = async (id: number) => {
     try {
+      setTestAction(`edit-${id}`);
       const r = await api(`/teacher/tests/${id}`, { token });
       setEditingTest(r.test);
       setTab("builder");
+      notify("Test opened for editing.");
     } catch (error: any) {
       notify(error.message || "Unable to open test for editing.");
+    } finally {
+      setTestAction("");
     }
   };
   const reExam = async (id: number) => {
     try {
+      setTestAction(`reexam-${id}`);
       const r = await api(`/teacher/tests/${id}/duplicate`, { method: "POST", token });
       await load();
       setEditingTest(r.test);
@@ -417,9 +430,23 @@ function TeacherDashboard({ token, user, notify }: any) {
       notify("Re-exam draft created. Review and publish it.");
     } catch (error: any) {
       notify(error.message || "Re-exam draft failed.");
+    } finally {
+      setTestAction("");
     }
   };
-  const loadResults = async (id: number) => setSelectedResults(await api(`/teacher/tests/${id}/results`, { token }));
+  const loadResults = async (id: number) => {
+    try {
+      setTestAction(`results-${id}`);
+      const data = await api(`/teacher/tests/${id}/results`, { token });
+      setSelectedResults(data);
+      setTab("results");
+      notify("Results loaded.");
+    } catch (error: any) {
+      notify(error.message || "Results load failed.");
+    } finally {
+      setTestAction("");
+    }
+  };
   const nav = [
     ["overview", LayoutDashboard],
     ["builder", Plus],
@@ -444,12 +471,12 @@ function TeacherDashboard({ token, user, notify }: any) {
             ["Certificates", dashboard.stats?.certificates, "purple", <Award />],
             ["Objections", dashboard.stats?.objections, "red", <Bell />]
           ]} />
-          <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
+          <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
         </>
       )}
       {tab === "builder" && <TestBuilder token={token} questions={questions} editingTest={editingTest} onCancelEdit={() => setEditingTest(null)} onSaved={() => { notify(editingTest ? "Test updated." : "Test saved."); setEditingTest(null); load(); }} />}
       {tab === "questions" && <QuestionBank token={token} questions={questions} onSaved={() => { notify("Question saved."); load(); }} />}
-      {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
+      {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
       {tab === "students" && <StudentManager token={token} data={students} onRefresh={load} notify={notify} />}
       {tab === "results" && <ResultsPanel data={selectedResults} tests={tests} loadResults={loadResults} token={token} />}
       {tab === "objections" && <ObjectionPanel token={token} objections={objections} onRefresh={load} notify={notify} />}
@@ -940,10 +967,16 @@ function StudentManager({ token, data, onRefresh, notify }: any) {
 }
 
 function ResultsPanel({ data, tests, loadResults, token }: any) {
+  const [activeResult, setActiveResult] = useState<any>(null);
+  useEffect(() => setActiveResult(null), [data?.test?.id]);
   return (
     <>
       <Section title="Choose Test">{tests.map((t: any) => <button className="secondaryBtn" key={t.id} onClick={() => loadResults(t.id)}>{t.title}</button>)}</Section>
-      {data && <Section title={`Results: ${data.test.title}`} action={<a className="secondaryBtn" href={apiUrl(`/teacher/exports/results/${data.test.id}.csv`)}>CSV</a>}><StatsGrid stats={[["Highest", data.summary.highest, "green", <Medal />], ["Average", data.summary.average, "blue", <ClipboardList />], ["Pass %", `${data.summary.passPercentage}%`, "purple", <CheckCircle2 />]]} /><DataTable rows={data.results} columns={["studentName", "score", "total_marks", "percentage", "grade", "rank_label", "passed"]} actions={(r: any) => <><a className="secondaryBtn" href={`#result/${r.id}`}>View</a><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/pdf`, `result-${r.id}.pdf`, token)}>Result PDF</button><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/answer-review.pdf`, `answer-review-${r.id}.pdf`, token)}>Review PDF</button></>} /></Section>}
+      {data && <Section title={`Results: ${data.test.title}`} action={<button className="secondaryBtn" onClick={() => downloadFile(`/teacher/exports/results/${data.test.id}.csv`, `testsetu-results-${data.test.id}.csv`, token)}>CSV</button>}>
+        <StatsGrid stats={[["Highest", data.summary.highest, "green", <Medal />], ["Average", data.summary.average, "blue", <ClipboardList />], ["Pass %", `${data.summary.passPercentage}%`, "purple", <CheckCircle2 />]]} />
+        <DataTable rows={data.results} columns={["studentName", "score", "total_marks", "percentage", "grade", "rank_label", "passed"]} actions={(r: any) => <><button className="secondaryBtn" onClick={() => setActiveResult(r)}>Details</button><a className="secondaryBtn" href={`#result/${r.id}`}>Open</a><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/pdf`, `result-${r.id}.pdf`, token)}>Result PDF</button><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/answer-review.pdf`, `answer-review-${r.id}.pdf`, token)}>Review PDF</button></>} />
+      </Section>}
+      {activeResult && <Section title={`Detailed Result: ${activeResult.studentName}`} action={<button className="secondaryBtn" onClick={() => setActiveResult(null)}>Close</button>}><ResultCard result={activeResult} token={token} /></Section>}
     </>
   );
 }
@@ -968,7 +1001,7 @@ function TeacherSettings() {
   );
 }
 
-function TestCards({ tests, publish, results, publishingId, deleteTest, editTest, reExam }: any) {
+function TestCards({ tests, publish, results, publishingId, actionId = "", deleteTest, editTest, reExam }: any) {
   if (!tests?.length) return <Empty title="No tests yet" />;
   return (
     <div className="cardGrid">
@@ -976,6 +1009,7 @@ function TestCards({ tests, publish, results, publishingId, deleteTest, editTest
         const isPublished = t.status === "PUBLISHED";
         const isPublishing = publishingId === t.id;
         const life = testLifecycle(t);
+        const busy = (name: string) => actionId === `${name}-${t.id}`;
         return (
           <div className="testCardSmall" key={t.id}>
             <div className="testCardTitle">
@@ -992,12 +1026,12 @@ function TestCards({ tests, publish, results, publishingId, deleteTest, editTest
               <button className="iconBtn" onClick={() => navigator.clipboard.writeText(`${location.origin}/#test/${t.shareSlug}`)} title="Copy"><Copy size={16} /></button>
             </div>
             <div className="rowActions cardActions">
-              {editTest && <button className="secondaryBtn" onClick={() => editTest(t.id)}><Pencil size={16} /> Edit</button>}
-              <a className="secondaryBtn" href={`#test/${t.shareSlug}`}>Preview</a>
+              {editTest && <button className="secondaryBtn" disabled={busy("edit")} onClick={() => editTest(t.id)}><Pencil size={16} /> {busy("edit") ? "Opening..." : "Edit"}</button>}
+              <button className="secondaryBtn" onClick={() => { location.hash = `#test/${t.shareSlug}`; }}>Preview</button>
               <button className="successBtn" disabled={isPublished || isPublishing} onClick={() => publish(t.id)}>{isPublishing ? "Publishing..." : isPublished ? "Published" : "Publish"}</button>
-              <button className="secondaryBtn" onClick={() => results(t.id)}>Results</button>
-              {reExam && <button className="secondaryBtn" onClick={() => reExam(t.id)}><RotateCcw size={16} /> Re-exam</button>}
-              {deleteTest && <button className="dangerBtn" onClick={() => deleteTest(t.id)}>Delete</button>}
+              <button className="secondaryBtn" disabled={busy("results")} onClick={() => results(t.id)}>{busy("results") ? "Loading..." : "Results"}</button>
+              {reExam && <button className="secondaryBtn" disabled={busy("reexam")} onClick={() => reExam(t.id)}><RotateCcw size={16} /> {busy("reexam") ? "Creating..." : "Re-exam"}</button>}
+              {deleteTest && <button className="dangerBtn" disabled={busy("delete")} onClick={() => deleteTest(t.id)}>{busy("delete") ? "Deleting..." : "Delete"}</button>}
             </div>
           </div>
         );
