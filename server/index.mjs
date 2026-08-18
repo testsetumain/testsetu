@@ -294,6 +294,7 @@ async function teacherRoutes(req, res, pathName, method, user, url) {
   if (method === "POST" && pathName.match(/^\/api\/teacher\/tests\/[^/]+\/publish$/)) return setTestStatus(res, user, idFrom(pathName, 4), "PUBLISHED");
   if (method === "POST" && pathName.match(/^\/api\/teacher\/tests\/[^/]+\/stop$/)) return setTestStatus(res, user, idFrom(pathName, 4), "STOPPED");
   if (method === "POST" && pathName.match(/^\/api\/teacher\/tests\/[^/]+\/duplicate$/)) return duplicateTest(res, user, idFrom(pathName, 4));
+  if (method === "POST" && pathName.match(/^\/api\/teacher\/tests\/[^/]+\/results\/release$/)) return releaseTestResults(res, user, idFrom(pathName, 4));
   if (method === "GET" && pathName.match(/^\/api\/teacher\/tests\/[^/]+\/results$/)) return teacherResults(res, user, idFrom(pathName, 4));
   if (method === "POST" && pathName.match(/^\/api\/teacher\/attempts\/[^/]+\/manual-evaluate$/)) return manualEvaluate(req, res, user, idFrom(pathName, 4));
   if (method === "GET" && pathName === "/api/teacher/students") return teacherStudents(res, user);
@@ -806,6 +807,19 @@ async function teacherResults(res, user, testId) {
   return send(res, 200, { test: parseTest(await getById("tests", testId)), results: rows, summary: resultSummary(rows) });
 }
 
+async function releaseTestResults(res, user, testId) {
+  await ensureOwnTest(user.id, testId);
+  const now = new Date();
+  await updateOne("tests", { _id: oid(testId), teacherId: user.id }, { $set: { "settings.resultRelease": "IMMEDIATE", updatedAt: now } });
+  await col("results").updateMany({ testId }, { $set: { publishedAt: now, updatedAt: now } });
+  const rows = await Promise.all((await findMany("results", { testId })).map(hydrateResultRow));
+  await Promise.all(rows.map((result) => maybeIssueCertificate(result)));
+  await notifyTestStudents(testId, "Result released", "Your detailed result and certificate are now available.", "SUCCESS");
+  await audit(user.id, "RELEASE_RESULTS", "Test", testId, { results: rows.length });
+  rows.sort((a, b) => (a.rank || 999999) - (b.rank || 999999) || b.score - a.score);
+  return send(res, 200, { test: parseTest(await getById("tests", testId)), results: rows, summary: resultSummary(rows), released: true });
+}
+
 async function teacherStudents(res, user) {
   const tests = await findMany("tests", { teacherId: user.id });
   const testIds = tests.map((t) => t.id);
@@ -1134,6 +1148,7 @@ async function hydrateResultRow(row) {
     total_marks: row.totalMarks,
     rank_label: row.rankLabel,
     time_taken: row.timeTaken,
+    published_at: row.publishedAt,
     breakdown_json: JSON.stringify(row.breakdown || {}),
     certificate_id: cert?.certificateId,
     testSettings: test?.settings || {},
@@ -1243,7 +1258,7 @@ function validatePassword(password) { if (String(password || "").length < 8) thr
 
 async function ensureAttemptAccess(id, user, body = {}) { const attempt = await getById("attempts", id); if (!attempt) throw statusError(404, "Attempt not found."); if (attempt.studentUserId && (!user || attempt.studentUserId !== user.id)) throw statusError(403, "Access denied."); if (!attempt.studentUserId && attempt.guestKey && body.guestKey !== attempt.guestKey) throw statusError(403, "Access denied."); return attempt; }
 function ensureResultAccess(result, user) { if (!result) throw statusError(404, "Result not found."); if (user?.role === "SUPER_ADMIN") return; if (user?.role === "TEACHER" && result.teacher_id === user.id) return; if (result.studentUserId && user?.id === result.studentUserId) return; if (!result.studentUserId) return; throw statusError(403, "Access denied."); }
-function canSeeDetailedResult(result, user) { if (!result) return false; if (user?.role === "SUPER_ADMIN") return true; if (user?.role === "TEACHER" && result.teacher_id === user.id) return true; if (result.test_status && result.test_status !== "PUBLISHED") return true; const settings = result.testSettings || {}; if (settings.resultRelease === "NEVER") return false; const times = [settings.availabilityEnd, result.due_at].filter(Boolean).map((v) => new Date(v).getTime()).filter(Number.isFinite); return !times.length || Date.now() >= Math.max(...times); }
+function canSeeDetailedResult(result, user) { if (!result) return false; if (user?.role === "SUPER_ADMIN") return true; if (user?.role === "TEACHER" && result.teacher_id === user.id) return true; if (result.test_status && result.test_status !== "PUBLISHED") return true; const settings = result.testSettings || {}; if (result.publishedAt || settings.resultRelease === "IMMEDIATE") return true; if (settings.resultRelease === "NEVER" || settings.resultRelease === "AFTER_TEACHER_PUBLISHES") return false; const times = [settings.availabilityEnd, result.due_at].filter(Boolean).map((v) => new Date(v).getTime()).filter(Number.isFinite); return !times.length || Date.now() >= Math.max(...times); }
 function studentVisibleResult(result, user) { if (!result) return result; const detailed = canSeeDetailedResult(result, user); const unlockAt = result.testSettings?.availabilityEnd || result.due_at || null; if (detailed) return { ...result, detailsAvailable: true, lockedUntil: null }; return { id: result.id, testId: result.testId, test_id: result.testId, attemptId: result.attemptId, attempt_id: result.attemptId, studentUserId: result.studentUserId, score: result.score, totalMarks: result.totalMarks, total_marks: result.totalMarks, percentage: result.percentage, passed: !!result.passed, grade: result.grade, studentName: result.studentName, testTitle: result.testTitle, detailsAvailable: false, lockedUntil: unlockAt, lockedMessage: "Detailed result, rank, answers and certificate will be available after the test ends." }; }
 
 function compareRank(a, b, breakers) { if (Number(b.score) !== Number(a.score)) return Number(b.score) - Number(a.score); for (const br of breakers) { if (br === "accuracy" && Number(b.accuracy) !== Number(a.accuracy)) return Number(b.accuracy) - Number(a.accuracy); if (br === "correct" && Number(b.correct) !== Number(a.correct)) return Number(b.correct) - Number(a.correct); if (br === "negativeMarks" && Number(a.wrong) !== Number(b.wrong)) return Number(a.wrong) - Number(b.wrong); if (br === "timeTaken" && Number(a.timeTaken) !== Number(b.timeTaken)) return Number(a.timeTaken) - Number(b.timeTaken); } return 0; }

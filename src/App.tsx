@@ -447,6 +447,19 @@ function TeacherDashboard({ token, user, notify }: any) {
       setTestAction("");
     }
   };
+  const releaseResults = async (id: number) => {
+    try {
+      setTestAction(`release-${id}`);
+      const data = await api(`/teacher/tests/${id}/results/release`, { method: "POST", token });
+      setSelectedResults(data);
+      await load();
+      notify("Results released for students.");
+    } catch (error: any) {
+      notify(error.message || "Result release failed.");
+    } finally {
+      setTestAction("");
+    }
+  };
   const nav = [
     ["overview", LayoutDashboard],
     ["studio", Sparkles],
@@ -472,15 +485,15 @@ function TeacherDashboard({ token, user, notify }: any) {
             ["Certificates", dashboard.stats?.certificates, "purple", <Award />],
             ["Objections", dashboard.stats?.objections, "red", <Bell />]
           ]} />
-          <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
+          <Section title="Recent Tests"><TestCards tests={tests.slice(0, 4)} publish={publish} results={loadResults} releaseResults={releaseResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>
         </>
       )}
       {tab === "studio" && <ExamStudio token={token} onRefresh={load} notify={notify} />}
       {tab === "builder" && <TestBuilder token={token} questions={questions} editingTest={editingTest} onCancelEdit={() => setEditingTest(null)} onSaved={() => { notify(editingTest ? "Test updated." : "Test saved."); setEditingTest(null); load(); }} />}
       {tab === "questions" && <QuestionBank token={token} questions={questions} onSaved={() => { notify("Question saved."); load(); }} />}
-      {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
+      {tab === "tests" && <Section title="My Tests"><TestCards tests={tests} publish={publish} results={loadResults} releaseResults={releaseResults} publishingId={publishingId} actionId={testAction} deleteTest={deleteTest} editTest={editTest} reExam={reExam} /></Section>}
       {tab === "students" && <StudentManager token={token} data={students} onRefresh={load} notify={notify} />}
-      {tab === "results" && <ResultsPanel data={selectedResults} tests={tests} loadResults={loadResults} token={token} />}
+      {tab === "results" && <ResultsPanel data={selectedResults} tests={tests} loadResults={loadResults} releaseResults={releaseResults} actionId={testAction} token={token} />}
       {tab === "objections" && <ObjectionPanel token={token} objections={objections} onRefresh={load} notify={notify} />}
       {tab === "settings" && <TeacherSettings />}
     </DashboardFrame>
@@ -1081,13 +1094,14 @@ function StudentManager({ token, data, onRefresh, notify }: any) {
   );
 }
 
-function ResultsPanel({ data, tests, loadResults, token }: any) {
+function ResultsPanel({ data, tests, loadResults, releaseResults, actionId = "", token }: any) {
   const [activeResult, setActiveResult] = useState<any>(null);
   useEffect(() => setActiveResult(null), [data?.test?.id]);
+  const releasing = data?.test?.id && actionId === `release-${data.test.id}`;
   return (
     <>
       <Section title="Choose Test">{tests.map((t: any) => <button className="secondaryBtn" key={t.id} onClick={() => loadResults(t.id)}>{t.title}</button>)}</Section>
-      {data && <Section title={`Results: ${data.test.title}`} action={<button className="secondaryBtn" onClick={() => downloadFile(`/teacher/exports/results/${data.test.id}.csv`, `testsetu-results-${data.test.id}.csv`, token)}>CSV</button>}>
+      {data && <Section title={`Results: ${data.test.title}`} action={<div className="rowActions"><button className="successBtn" disabled={releasing} onClick={() => releaseResults(data.test.id)}>{releasing ? "Releasing..." : "Release Result"}</button><button className="secondaryBtn" onClick={() => downloadFile(`/teacher/exports/results/${data.test.id}.csv`, `testsetu-results-${data.test.id}.csv`, token)}>CSV</button></div>}>
         <StatsGrid stats={[["Highest", data.summary.highest, "green", <Medal />], ["Average", data.summary.average, "blue", <ClipboardList />], ["Pass %", `${data.summary.passPercentage}%`, "purple", <CheckCircle2 />]]} />
         <DataTable rows={data.results} columns={["studentName", "score", "total_marks", "percentage", "grade", "rank_label", "passed"]} actions={(r: any) => <><button className="secondaryBtn" onClick={() => setActiveResult(r)}>Details</button><a className="secondaryBtn" href={`#result/${r.id}`}>Open</a><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/pdf`, `result-${r.id}.pdf`, token)}>Result PDF</button><button className="secondaryBtn" onClick={() => downloadFile(`/public/results/${r.id}/answer-review.pdf`, `answer-review-${r.id}.pdf`, token)}>Review PDF</button></>} />
       </Section>}
@@ -1116,7 +1130,7 @@ function TeacherSettings() {
   );
 }
 
-function TestCards({ tests, publish, results, publishingId, actionId = "", deleteTest, editTest, reExam }: any) {
+function TestCards({ tests, publish, results, releaseResults, publishingId, actionId = "", deleteTest, editTest, reExam }: any) {
   if (!tests?.length) return <Empty title="No tests yet" />;
   return (
     <div className="cardGrid">
@@ -1145,6 +1159,7 @@ function TestCards({ tests, publish, results, publishingId, actionId = "", delet
               <button className="secondaryBtn" onClick={() => { location.hash = `#test/${t.shareSlug}`; }}>Preview</button>
               <button className="successBtn" disabled={isPublished || isPublishing} onClick={() => publish(t.id)}>{isPublishing ? "Publishing..." : isPublished ? "Published" : "Publish"}</button>
               <button className="secondaryBtn" disabled={busy("results")} onClick={() => results(t.id)}>{busy("results") ? "Loading..." : "Results"}</button>
+              {releaseResults && <button className="successBtn" disabled={busy("release")} onClick={() => releaseResults(t.id)}>{busy("release") ? "Releasing..." : "Release Result"}</button>}
               {reExam && <button className="secondaryBtn" disabled={busy("reexam")} onClick={() => reExam(t.id)}><RotateCcw size={16} /> {busy("reexam") ? "Creating..." : "Re-exam"}</button>}
               {deleteTest && <button className="dangerBtn" disabled={busy("delete")} onClick={() => deleteTest(t.id)}>{busy("delete") ? "Deleting..." : "Delete"}</button>}
             </div>
