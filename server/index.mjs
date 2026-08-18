@@ -1210,7 +1210,13 @@ function validateStudentDetails(fields, details) {
   }
   return clean;
 }
-function ensureTestCanStart(test) { const now = Date.now(); if (test.settings.availabilityStart && new Date(test.settings.availabilityStart).getTime() > now) throw statusError(400, "Test has not started yet."); if (test.settings.availabilityEnd && new Date(test.settings.availabilityEnd).getTime() < now) throw statusError(400, "Test is closed for new students."); }
+function ensureTestCanStart(test) {
+  const now = Date.now();
+  const start = scheduleTimeMs(test.settings.availabilityStart);
+  const end = scheduleTimeMs(test.settings.availabilityEnd);
+  if (start && start > now) throw statusError(400, "Test has not started yet.");
+  if (end && end < now) throw statusError(400, "Test is closed for new students.");
+}
 async function countAttemptsForStart(test, context) {
   if (context.isPractice) return 0;
   if (test.accessMode === "GUEST_ALLOWED") {
@@ -1265,7 +1271,7 @@ function canSeeDetailedResult(result, user) {
   const settings = result.testSettings || {};
   if (result.publishedAt || settings.resultRelease === "IMMEDIATE") return true;
   if (settings.resultRelease === "NEVER" || settings.resultRelease === "AFTER_TEACHER_PUBLISHES") return false;
-  const times = [settings.availabilityEnd, result.due_at].filter(Boolean).map((v) => new Date(v).getTime()).filter(Number.isFinite);
+  const times = [scheduleTimeMs(settings.availabilityEnd), scheduleTimeMs(result.due_at)].filter(Number.isFinite);
   return !times.length || Date.now() >= Math.max(...times);
 }
 function lockedResultMessage(result) {
@@ -1307,6 +1313,27 @@ function studentName(attempt) { return attempt.details?.fullName || attempt.deta
 function randomPassword() { return crypto.randomBytes(6).toString("base64url"); }
 function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 function round(n) { return Math.round(Number(n) * 100) / 100; }
+function scheduleTimeMs(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(text)) {
+    const parsed = new Date(text).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    const [, year, month, day, hour, minute, second = "0"] = match;
+    return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)) - appTimezoneOffsetMinutes() * 60_000;
+  }
+  const parsed = new Date(text).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function appTimezoneOffsetMinutes() {
+  const raw = Number(process.env.APP_TIMEZONE_OFFSET_MINUTES || process.env.TESTSETU_TIMEZONE_OFFSET_MINUTES || 330);
+  return Number.isFinite(raw) ? raw : 330;
+}
 function shouldRandomize(value) { return value === true || value === "true"; }
 function shuffle(items) { return [...items].sort(() => Math.random() - 0.5); }
 function normalizeAnswerValue(value) { if (value && typeof value === "object" && value.option === "__OTHER__") return value.text || ""; return value; }

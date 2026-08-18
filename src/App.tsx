@@ -729,16 +729,21 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, stu
   useEffect(() => {
     if (!editingTest) return;
     const base = defaultTestForm();
+    const mergedSettings = {
+      ...base.settings,
+      ...(editingTest.settings || {}),
+      resultTemplate: { ...base.settings.resultTemplate, ...(editingTest.settings?.resultTemplate || {}) },
+      certificate: { ...base.settings.certificate, ...(editingTest.settings?.certificate || {}), template: { ...base.settings.certificate.template, ...(editingTest.settings?.certificate?.template || {}) } },
+      answerReview: { ...base.settings.answerReview, ...(editingTest.settings?.answerReview || {}) }
+    };
     setForm({
       ...base,
       ...editingTest,
       questionIds: editingTest.questionIds || editingTest.questions?.map((q: any) => q.id) || [],
       settings: {
-        ...base.settings,
-        ...(editingTest.settings || {}),
-        resultTemplate: { ...base.settings.resultTemplate, ...(editingTest.settings?.resultTemplate || {}) },
-        certificate: { ...base.settings.certificate, ...(editingTest.settings?.certificate || {}), template: { ...base.settings.certificate.template, ...(editingTest.settings?.certificate?.template || {}) } },
-        answerReview: { ...base.settings.answerReview, ...(editingTest.settings?.answerReview || {}) }
+        ...mergedSettings,
+        availabilityStart: toDateTimeLocalInput(mergedSettings.availabilityStart),
+        availabilityEnd: toDateTimeLocalInput(mergedSettings.availabilityEnd)
       },
       studentFields: editingTest.studentFields || base.studentFields
     });
@@ -755,8 +760,14 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, stu
       if (publish && selectedQuestions.length === 0) throw new Error("Publish karne se pehle at least one question add karein.");
       const path = editingTest ? `/teacher/tests/${editingTest.id}` : "/teacher/tests";
       const method = editingTest ? "PUT" : "POST";
+      const settings = {
+        ...form.settings,
+        availabilityStart: toApiDateTime(form.settings.availabilityStart),
+        availabilityEnd: toApiDateTime(form.settings.availabilityEnd)
+      };
       const payload = {
         ...form,
+        settings,
         questionIds: studioMode ? [] : form.questionIds,
         embeddedQuestions: studioMode ? selectedQuestions.map(({ id, ...q }: any) => q) : undefined,
         totalMarks,
@@ -1506,8 +1517,8 @@ function formatTime(seconds: number) {
 function testLifecycle(test: any) {
   if (test.status !== "PUBLISHED") return { label: "Draft", tone: "draft", time: "Not live" };
   const now = Date.now();
-  const start = test.settings?.availabilityStart ? new Date(test.settings.availabilityStart).getTime() : null;
-  const end = test.settings?.availabilityEnd ? new Date(test.settings.availabilityEnd).getTime() : null;
+  const start = scheduleTimeMs(test.settings?.availabilityStart);
+  const end = scheduleTimeMs(test.settings?.availabilityEnd);
   if (start && start > now) return { label: "Upcoming", tone: "draft", time: `Starts ${formatDateTime(test.settings.availabilityStart)}` };
   if (end && end <= now) return { label: "Complete", tone: "stopped", time: "Closed for new students" };
   if (end) return { label: "Running", tone: "published", time: `${formatTime(Math.max(0, Math.round((end - now) / 1000)))} left to join` };
@@ -1516,6 +1527,28 @@ function testLifecycle(test: any) {
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+function toApiDateTime(value: string) {
+  if (!value) return "";
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
+
+function toDateTimeLocalInput(value: string) {
+  if (!value) return "";
+  if (!/[zZ]$|[+-]\d{2}:?\d{2}$/.test(value)) return value.slice(0, 16);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function scheduleTimeMs(value: string) {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function safeJson(text: string, fallback: any) {
