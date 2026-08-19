@@ -123,6 +123,7 @@ function LocalChatbot({ user, token, notify }: { user: User | null; token: strin
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [showMakeQuestions, setShowMakeQuestions] = useState(false);
+  const [makeQuestionsSource, setMakeQuestionsSource] = useState("");
   const [position, setPosition] = useState<{ x: number; y: number } | null>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(positionKey) || "null");
@@ -211,6 +212,13 @@ function LocalChatbot({ user, token, notify }: { user: User | null; token: strin
   const send = (value = input) => {
     const question = value.trim();
     if (!question) return;
+    if (/\n/.test(question) && /(^|\n)\s*(?:[-*]\s*)?(?:\*\*)?(?:q\s*\d+|\d+)[.)]|(^|\n)\s*[a-d][.)]/im.test(question)) {
+      setMakeQuestionsSource(question);
+      setShowMakeQuestions(true);
+      setMessages((current) => [...current, { id: Date.now(), role: "user", text: question }]);
+      setInput("");
+      return;
+    }
     const answer = replyTo(question);
     setMessages((current) => [...current, { id: Date.now(), role: "user", text: question }, ...(answer ? [{ id: Date.now() + 1, role: "assistant" as const, text: answer }] : [])]);
     setInput("");
@@ -240,18 +248,22 @@ function LocalChatbot({ user, token, notify }: { user: User | null; token: strin
       <button className="chatLauncher" onClick={toggleChat} onPointerDown={(event) => { const rect = event.currentTarget.getBoundingClientRect(); dragStart.current = { pointerX: event.clientX, pointerY: event.clientY, x: rect.left, y: rect.top }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={moveLauncher} onPointerUp={stopDragging} onPointerCancel={stopDragging} aria-label={open ? "Close Setu AI" : "Open Setu AI"} title="Setu AI: drag to move, click to open">
         {open ? <X size={22} /> : <span className="setuLogo"><Bot size={23} /><i /></span>}
       </button>
-      <MakeQuestionsModal isOpen={showMakeQuestions} token={token} user={user} onClose={() => setShowMakeQuestions(false)} notify={notify} />
+      <MakeQuestionsModal isOpen={showMakeQuestions} initialText={makeQuestionsSource} token={token} user={user} onClose={() => { setShowMakeQuestions(false); setMakeQuestionsSource(""); }} notify={notify} />
     </div>
   );
 }
 
-function MakeQuestionsModal({ isOpen, token, user, onClose, notify }: { isOpen: boolean; token: string; user: User | null; onClose: () => void; notify: (message: string) => void }) {
-  const [sourceText, setSourceText] = useState("");
+function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify }: { isOpen: boolean; initialText: string; token: string; user: User | null; onClose: () => void; notify: (message: string) => void }) {
+  const [sourceText, setSourceText] = useState(initialText);
   const [sourceImage, setSourceImage] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [questions, setQuestions] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (isOpen && initialText) setSourceText(initialText);
+  }, [initialText, isOpen]);
 
   const readPdfText = async (file: File) => {
     const data = await file.arrayBuffer();
@@ -290,7 +302,7 @@ function MakeQuestionsModal({ isOpen, token, user, onClose, notify }: { isOpen: 
     const parsed = textQuestions.length ? textQuestions : parseQuestionsFromCSV(sourceText);
     const looksStructured = /(^|\n)\s*(?:[-*]\s*)?(?:\*\*)?(?:q\s*\d+|\d+)[.)]|(^|\n)\s*[a-d][.)]/im.test(sourceText);
     const generated = parsed.length ? parsed : looksStructured ? [] : sourceText.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).map((part) => ({
-      type: "SHORT_ANSWER", text: `Explain: ${part}`, options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: false
+      type: "SHORT_ANSWER", text: part, options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: false
     }));
     if (!generated.length && !sourceImage) {
       setError(looksStructured ? "MCQ format check karein: question ke options a), b), c), d) ke saath ✅ ya Correct: a marker zaroor dein." : "Text paste karein ya image/PDF add karein.");
