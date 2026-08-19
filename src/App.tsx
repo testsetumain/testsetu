@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Award,
   Bell,
+  Bot,
   BookOpen,
   CheckCircle2,
   ClipboardList,
@@ -12,6 +13,7 @@ import {
   LayoutDashboard,
   Lock,
   LogOut,
+  MessageCircle,
   Medal,
   Pencil,
   Play,
@@ -27,7 +29,8 @@ import {
   Trash2,
   Upload,
   UserCheck,
-  Users
+  Users,
+  X
 } from "lucide-react";
 
 type User = { id: number; email: string; name: string; role: "SUPER_ADMIN" | "TEACHER" | "STUDENT"; status: string };
@@ -104,6 +107,130 @@ export default function App() {
           {user.role === "STUDENT" && <StudentDashboard token={token} notify={notify} />}
         </main>
       )}
+      <LocalChatbot user={user} />
+    </div>
+  );
+}
+
+type ChatMessage = { id: number; role: "assistant" | "user"; text: string };
+
+function LocalChatbot({ user }: { user: User | null }) {
+  const storageKey = "testsetu_local_chat";
+  const positionKey = "testsetu_setu_ai_position";
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(positionKey) || "null");
+      return saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) ? saved : null;
+    } catch {
+      return null;
+    }
+  });
+  const dragStart = useRef<{ pointerX: number; pointerY: number; x: number; y: number } | null>(null);
+  const didDrag = useRef(false);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+      return Array.isArray(saved) && saved.length ? saved : [{ id: Date.now(), role: "assistant", text: "Namaste! Main Setu AI hoon, TestSetu ka personal assistant. Bulk questions import, Studio, Question Bank ya website ke kisi bhi feature ke baare me poochhiye." }];
+    } catch {
+      return [{ id: Date.now(), role: "assistant", text: "Namaste! Main Setu AI hoon, TestSetu ka personal assistant. Aap bulk questions, Studio ya Question Bank ke baare me poochh sakte hain." }];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(storageKey, JSON.stringify(messages.slice(-30)));
+  }, [messages]);
+
+  useEffect(() => {
+    if (position) localStorage.setItem(positionKey, JSON.stringify(position));
+  }, [position]);
+
+  const moveLauncher = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!dragStart.current) return;
+    didDrag.current = true;
+    const launcherSize = 62;
+    const x = Math.max(8, Math.min(window.innerWidth - launcherSize - 8, dragStart.current.x + event.clientX - dragStart.current.pointerX));
+    const y = Math.max(8, Math.min(window.innerHeight - launcherSize - 8, dragStart.current.y + event.clientY - dragStart.current.pointerY));
+    setPosition({ x, y });
+  };
+
+  const stopDragging = () => {
+    dragStart.current = null;
+    window.setTimeout(() => { didDrag.current = false; }, 0);
+  };
+
+  const toggleChat = () => {
+    if (!didDrag.current) setOpen((value) => !value);
+  };
+
+  const replyTo = (question: string) => {
+    const text = question.toLowerCase().trim();
+    if (!text) return "Aap kya jaana chahte hain? Example: bulk import kaise karein?";
+    if (/(bulk|import|csv|paste|upload).*(question|sawal)|question.*(bulk|import|csv)/.test(text)) {
+      return "Bulk Import do jagah available hai: Studio me paper ke liye aur Questions tab me Question Bank ke liye. Button dabaiye, Text ya CSV mode chuniye, questions paste karke Parse karein, preview check karein aur Import karein.";
+    }
+    if (/(format|text format|sample|example|template)/.test(text)) {
+      return "Text format: Q1. What is 2+2?\na) 3\nb) 4\nCorrect: b\nMarks: 1\n\nHar question Q-number se start karein. CSV columns: Question, Option A, Option B, Option C, Option D, Correct, Marks.";
+    }
+    if (/(studio|paper|exam).*(question|sawal)|question.*studio/.test(text)) {
+      return "Studio tab me Create Questions Here se ek question banaiye, ya This Paper's Questions ke paas Bulk Import se multiple questions add kijiye. Ye questions current paper me rahenge.";
+    }
+    if (/(question bank|questions tab|reusable|save).*/.test(text)) {
+      return "Questions tab ka Bulk Import Question Bank me questions save karta hai. Yahan se aap questions search, edit aur future tests me reuse kar sakte hain.";
+    }
+    if (/(open|go|kholo|dikhao).*(studio|paper)/.test(text)) {
+      location.hash = "#home";
+      window.setTimeout(() => Array.from(document.querySelectorAll<HTMLButtonElement>(".tabs button")).find((button) => button.textContent?.toLowerCase().includes("studio"))?.click(), 0);
+      return "Studio dashboard se open kijiye. Main aapko wahan le ja raha hoon.";
+    }
+    if (/(open|go|kholo|dikhao).*(question|bank)/.test(text)) {
+      return "Questions tab kholkar Question Bank section me jaiye. Wahan Bulk Import button search ke paas milega.";
+    }
+    if (/(hello|hi|hii|namaste|hey|help|madad)/.test(text)) {
+      return `Namaste${user?.name ? ` ${user.name}` : ""}! Main bina kisi external API ke kaam karta hoon. Aap mujhse bulk import, CSV format, Studio, Question Bank, test creation ya website navigation ke baare me pooch sakte hain.`;
+    }
+    if (/(api|internet|offline|local)/.test(text)) {
+      return "Main completely local hoon: mere answers browser ke rules aur saved chat history se aate hain. Kisi chatbot API, AI API ya external service ki zarurat nahi hai.";
+    }
+    if (/(clear|delete|reset).*(chat|conversation|history)/.test(text)) {
+      setMessages([{ id: Date.now(), role: "assistant", text: "Chat history clear ho gayi. Setu AI yahin hai, TestSetu ke features me madad ke liye." }]);
+      return "";
+    }
+    return "Main TestSetu ke question workflow par focused hoon. Aap pooch sakte hain: 'bulk import kaise karein?', 'CSV format batao', 'Studio me question kaise add karein?' ya 'API ki zarurat hai?'";
+  };
+
+  const send = (value = input) => {
+    const question = value.trim();
+    if (!question) return;
+    const answer = replyTo(question);
+    setMessages((current) => [...current, { id: Date.now(), role: "user", text: question }, ...(answer ? [{ id: Date.now() + 1, role: "assistant" as const, text: answer }] : [])]);
+    setInput("");
+  };
+
+  return (
+    <div className={`localChatbot${open ? " isOpen" : ""}`} style={position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined}>
+      {open && (
+        <section className="chatPanel" aria-label="Setu AI personal chatbot">
+          <header className="chatHeader">
+            <div><span className="chatAvatar"><Bot size={18} /><i /></span><div><b>Setu AI</b><small>Private local assistant</small></div></div>
+            <button className="iconBtn" onClick={() => setOpen(false)} aria-label="Close chatbot"><X size={17} /></button>
+          </header>
+          <div className="chatMessages" aria-live="polite">
+            {messages.map((message) => <div className={`chatMessage ${message.role}`} key={message.id}>{message.text}</div>)}
+          </div>
+          <div className="chatSuggestions">
+            {["Bulk import kaise karein?", "CSV format batao", "API ki zarurat hai?"].map((suggestion) => <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>)}
+          </div>
+          <form className="chatComposer" onSubmit={(event) => { event.preventDefault(); send(); }}>
+            <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Apna sawal likhiye..." aria-label="Chat message" />
+            <button className="primaryBtn" type="submit" aria-label="Send message"><MessageCircle size={16} /></button>
+          </form>
+        </section>
+      )}
+      <button className="chatLauncher" onClick={toggleChat} onPointerDown={(event) => { const rect = event.currentTarget.getBoundingClientRect(); dragStart.current = { pointerX: event.clientX, pointerY: event.clientY, x: rect.left, y: rect.top }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={moveLauncher} onPointerUp={stopDragging} onPointerCancel={stopDragging} aria-label={open ? "Close Setu AI" : "Open Setu AI"} title="Setu AI: drag to move, click to open">
+        {open ? <X size={22} /> : <span className="setuLogo"><Bot size={23} /><i /></span>}
+      </button>
     </div>
   );
 }
@@ -504,21 +631,34 @@ function TeacherDashboard({ token, user, notify }: any) {
 function ExamStudio({ token, onRefresh, notify }: any) {
   const [paperQuestions, setPaperQuestions] = useState<any[]>([]);
   const [paperKey, setPaperKey] = useState(0);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+
   const addPaperQuestion = (question: any) => {
     const id = `paper-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setPaperQuestions((items) => [...items, { ...question, id }]);
     notify("Question added to this paper only.");
   };
+
   const removePaperQuestion = (id: string) => setPaperQuestions((items) => items.filter((q) => q.id !== id));
+
   const resetPaper = () => {
     setPaperQuestions([]);
     setPaperKey((key) => key + 1);
   };
+
+  const handleBulkImport = async (questions: any[]) => {
+    for (const q of questions) {
+      addPaperQuestion(q);
+    }
+    notify(`${questions.length} questions added to this paper.`);
+    setShowBulkImport(false);
+  };
+
   return (
     <div className="studioGrid">
       <QuickQuestionComposer onCreated={addPaperQuestion} />
       <div className="studioPaper">
-        <Section title="This Paper's Questions" action={<button className="secondaryBtn" type="button" onClick={resetPaper}>New Paper</button>}>
+        <Section title="This Paper's Questions" action={<div className="rowActions" style={{ gap: '8px' }}><button className="secondaryBtn" type="button" onClick={() => setShowBulkImport(true)}><Upload size={16} /> Bulk Import</button><button className="secondaryBtn" type="button" onClick={resetPaper}>New Paper</button></div>}>
           {paperQuestions.length ? (
             <div className="paperQuestionList">
               {paperQuestions.map((q, index) => (
@@ -546,6 +686,7 @@ function ExamStudio({ token, onRefresh, notify }: any) {
           }}
         />
       </div>
+      <BulkImportModal isOpen={showBulkImport} onClose={() => setShowBulkImport(false)} onImport={handleBulkImport} notify={notify} />
     </div>
   );
 }
@@ -608,7 +749,9 @@ function QuestionBank({ token, questions, onSaved }: any) {
   const [form, setForm] = useState<any>(emptyQuestion());
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
   const visible = questions.filter((q: any) => `${q.text} ${q.subject} ${q.topic}`.toLowerCase().includes(query.toLowerCase()));
+
   const setOption = (i: number, v: string) => {
     const options = [...form.options];
     options[i] = v;
@@ -634,6 +777,15 @@ function QuestionBank({ token, questions, onSaved }: any) {
     setForm(emptyQuestion());
     onSaved();
   };
+
+  const handleBulkImport = async (importedQuestions: any[]) => {
+    for (const q of importedQuestions) {
+      await api("/teacher/questions", { method: "POST", token, body: q });
+    }
+    onSaved();
+    setShowBulkImport(false);
+  };
+
   const editQuestion = (q: any) => {
     setEditingId(q.id);
     setForm({
@@ -704,9 +856,10 @@ function QuestionBank({ token, questions, onSaved }: any) {
           <button className="primaryBtn"><Plus size={18} /> {editingId ? "Update Question" : "Save Question"}</button>
         </form>
       </Section>
-      <Section title="Question Bank" action={<label className="search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" /></label>}>
+      <Section title="Question Bank" action={<div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><button className="secondaryBtn" onClick={() => setShowBulkImport(true)}><Upload size={16} /> Bulk Import</button><label className="search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" /></label></div>}>
         <div className="questionList">{visible.map((q: any) => <QuestionCard key={q.id} q={q} action={<button className="secondaryBtn" onClick={() => editQuestion(q)}><Pencil size={16} /> Edit</button>} />)}</div>
       </Section>
+      <BulkImportModal isOpen={showBulkImport} onClose={() => setShowBulkImport(false)} onImport={handleBulkImport} notify={() => null} />
     </div>
   );
 }
@@ -1452,6 +1605,196 @@ function Empty({ title }: any) {
 
 function RefreshButton({ onClick }: any) {
   return <button className="secondaryBtn" onClick={onClick}>Refresh</button>;
+}
+
+function BulkImportModal({ isOpen, onClose, onImport, notify }: any) {
+  const [mode, setMode] = useState<'text' | 'csv'>('text');
+  const [input, setInput] = useState('');
+  const [preview, setPreview] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleParse = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      setPreview([]);
+      const parsed = mode === 'text' ? parseQuestionsFromText(input) : parseQuestionsFromCSV(input);
+      if (!parsed.length) throw new Error('No questions found. Check format and try again.');
+      setPreview(parsed);
+    } catch (err: any) {
+      setError(err.message || 'Parsing failed');
+      notify(err.message || 'Parsing failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConfirm = async () => {
+    try {
+      setLoading(true);
+      await onImport(preview);
+      setInput('');
+      setPreview([]);
+      setMode('text');
+      onClose();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modalOverlay" onClick={onClose}>
+      <div className="modalBox" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h2>Bulk Import Questions</h2>
+          <button className="iconBtn" onClick={onClose}><Trash2 size={18} /></button>
+        </div>
+
+        {!preview.length ? (
+          <>
+            <div className="segmented" style={{ marginBottom: '16px' }}>
+              <button className={mode === 'text' ? 'active' : ''} onClick={() => setMode('text')}>Paste Text</button>
+              <button className={mode === 'csv' ? 'active' : ''} onClick={() => setMode('csv')}>CSV Format</button>
+            </div>
+
+            {mode === 'text' && (
+              <TextArea label="Paste Questions" value={input} onChange={setInput} />
+            )}
+
+            {mode === 'csv' && (
+              <TextArea label="Paste CSV (Question,Option A,Option B,Correct,Marks)" value={input} onChange={setInput} />
+            )}
+
+            {error && <div className="formError" style={{ marginTop: '10px' }}>{error}</div>}
+
+            <div className="rowActions" style={{ marginTop: '16px', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="secondaryBtn" onClick={onClose} disabled={loading}>Cancel</button>
+              <button className="primaryBtn" onClick={handleParse} disabled={loading || !input.trim()}>
+                {loading ? 'Parsing...' : `Parse ${mode.toUpperCase()}`}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ marginBottom: '16px', padding: '12px', background: '#ecfdf5', borderRadius: '8px' }}>
+              <b style={{ color: '#16a34a' }}>✓ Found {preview.length} questions</b>
+            </div>
+
+            <div style={{ maxHeight: '400px', overflowY: 'auto', marginBottom: '16px', borderRadius: '8px', border: '1px solid #dce3ee', padding: '12px' }}>
+              {preview.map((q, i) => (
+                <div key={i} style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid #dce3ee' }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Q{i + 1}. {q.text?.substring(0, 60)}{q.text?.length > 60 ? '...' : ''}</div>
+                  {q.options?.length > 0 && (
+                    <div style={{ fontSize: '0.9em', color: '#657084', marginBottom: '4px' }}>
+                      Options: {q.options.join(', ').substring(0, 80)}...
+                    </div>
+                  )}
+                  <div style={{ fontSize: '0.85em', color: '#657084' }}>
+                    Type: {q.type} | Marks: {q.marks}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="rowActions" style={{ justifyContent: 'space-between', gap: '10px' }}>
+              <button className="secondaryBtn" onClick={() => { setPreview([]); setInput(''); }} disabled={loading}>
+                ← Back
+              </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button className="secondaryBtn" onClick={onClose} disabled={loading}>Cancel</button>
+                <button className="successBtn" onClick={handleConfirm} disabled={loading}>
+                  {loading ? 'Importing...' : `Import ${preview.length} Questions`}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function parseQuestionsFromText(text: string): any[] {
+  const questions: any[] = [];
+  const blocks = text.split(/Q\d+\.\s*/i).filter(b => b.trim());
+
+  for (const block of blocks) {
+    const lines = block.trim().split('\n').filter(l => l.trim());
+    if (!lines.length) continue;
+
+    const questionText = lines[0].trim();
+    const options: string[] = [];
+    let correctAnswer = '';
+    let marks = 1;
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const optionMatch = line.match(/^[a-z]\)\s*(.+)/i);
+      if (optionMatch) {
+        options.push(optionMatch[1]);
+        continue;
+      }
+      const correctMatch = line.match(/^(?:correct|answer|correct\s+answer)\s*[:\-]?\s*([a-z]|\d+)/i);
+      if (correctMatch) {
+        correctAnswer = correctMatch[1];
+        continue;
+      }
+      const marksMatch = line.match(/^marks?\s*[:\-]?\s*(\d+)/i);
+      if (marksMatch) {
+        marks = Number(marksMatch[1]);
+      }
+    }
+
+    if (questionText && options.length >= 2 && correctAnswer) {
+      const correctIndex = correctAnswer.toLowerCase().charCodeAt(0) - 97;
+      questions.push({
+        type: 'MCQ',
+        text: questionText,
+        options,
+        correct: correctIndex >= 0 && correctIndex < options.length ? [options[correctIndex]] : [],
+        marks,
+        negativeMarks: 0,
+        subject: '',
+        topic: '',
+        explanation: '',
+        difficulty: 'Medium',
+        allowOther: false
+      });
+    }
+  }
+
+  return questions;
+}
+
+function parseQuestionsFromCSV(text: string): any[] {
+  const questions: any[] = [];
+  const lines = text.split('\n').filter(l => l.trim());
+  if (lines.length < 2) return questions;
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(',').map(p => p.trim());
+    if (parts.length < 4) continue;
+    const [question, optA, optB, optC = '', optD = '', correct = '', marksStr = '1'] = parts;
+    const options = [optA, optB, optC, optD].filter(Boolean);
+    if (question && options.length >= 2) {
+      questions.push({
+        type: 'MCQ',
+        text: question,
+        options,
+        correct: correct ? [correct] : [],
+        marks: Number(marksStr) || 1,
+        negativeMarks: 0,
+        subject: '',
+        topic: '',
+        explanation: '',
+        difficulty: 'Medium',
+        allowOther: false
+      });
+    }
+  }
+  return questions;
 }
 
 async function api(path: string, opts: any = {}) {
