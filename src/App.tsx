@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   Award,
   Bell,
@@ -41,6 +43,7 @@ type Result = any;
 const tokenKey = "testsetu_token";
 const runtimeEnv = ((import.meta as any).env || {}) as Record<string, string | undefined>;
 const apiBaseUrl = String(runtimeEnv.VITE_API_URL || runtimeEnv.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem(tokenKey) || "");
@@ -107,18 +110,19 @@ export default function App() {
           {user.role === "STUDENT" && <StudentDashboard token={token} notify={notify} />}
         </main>
       )}
-      <LocalChatbot user={user} />
+      <LocalChatbot user={user} token={token} notify={notify} />
     </div>
   );
 }
 
 type ChatMessage = { id: number; role: "assistant" | "user"; text: string };
 
-function LocalChatbot({ user }: { user: User | null }) {
+function LocalChatbot({ user, token, notify }: { user: User | null; token: string; notify: (message: string) => void }) {
   const storageKey = "testsetu_local_chat";
   const positionKey = "testsetu_setu_ai_position";
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
+  const [showMakeQuestions, setShowMakeQuestions] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(positionKey) || "null");
@@ -170,6 +174,10 @@ function LocalChatbot({ user }: { user: User | null }) {
     if (/(bulk|import|csv|paste|upload).*(question|sawal)|question.*(bulk|import|csv)/.test(text)) {
       return "Bulk Import do jagah available hai: Studio me paper ke liye aur Questions tab me Question Bank ke liye. Button dabaiye, Text ya CSV mode chuniye, questions paste karke Parse karein, preview check karein aur Import karein.";
     }
+    if (/(make|banao|create|generate).*(question|sawal)|question.*(make|banao|create)/.test(text)) {
+      setShowMakeQuestions(true);
+      return "Make Questions panel khol diya. Text paste karein ya image/PDF add karke Create Preview dabaiye.";
+    }
     if (/(format|text format|sample|example|template)/.test(text)) {
       return "Text format: Q1. What is 2+2?\na) 3\nb) 4\nCorrect: b\nMarks: 1\n\nHar question Q-number se start karein. CSV columns: Question, Option A, Option B, Option C, Option D, Correct, Marks.";
     }
@@ -220,6 +228,7 @@ function LocalChatbot({ user }: { user: User | null }) {
             {messages.map((message) => <div className={`chatMessage ${message.role}`} key={message.id}>{message.text}</div>)}
           </div>
           <div className="chatSuggestions">
+            <button onClick={() => setShowMakeQuestions(true)}><Sparkles size={13} /> Make Questions</button>
             {["Bulk import kaise karein?", "CSV format batao", "API ki zarurat hai?"].map((suggestion) => <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>)}
           </div>
           <form className="chatComposer" onSubmit={(event) => { event.preventDefault(); send(); }}>
@@ -231,8 +240,109 @@ function LocalChatbot({ user }: { user: User | null }) {
       <button className="chatLauncher" onClick={toggleChat} onPointerDown={(event) => { const rect = event.currentTarget.getBoundingClientRect(); dragStart.current = { pointerX: event.clientX, pointerY: event.clientY, x: rect.left, y: rect.top }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={moveLauncher} onPointerUp={stopDragging} onPointerCancel={stopDragging} aria-label={open ? "Close Setu AI" : "Open Setu AI"} title="Setu AI: drag to move, click to open">
         {open ? <X size={22} /> : <span className="setuLogo"><Bot size={23} /><i /></span>}
       </button>
+      <MakeQuestionsModal isOpen={showMakeQuestions} token={token} user={user} onClose={() => setShowMakeQuestions(false)} notify={notify} />
     </div>
   );
+}
+
+function MakeQuestionsModal({ isOpen, token, user, onClose, notify }: { isOpen: boolean; token: string; user: User | null; onClose: () => void; notify: (message: string) => void }) {
+  const [sourceText, setSourceText] = useState("");
+  const [sourceImage, setSourceImage] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const readPdfText = async (file: File) => {
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const pages: string[] = [];
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      pages.push(content.items.map((item: any) => item.str || "").join(" "));
+    }
+    return pages.join("\n");
+  };
+
+  const readSource = async (file: File) => {
+    setBusy(true);
+    setError("");
+    setSourceName(file.name);
+    try {
+      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        setSourceText(await readPdfText(file));
+      } else if (file.type.startsWith("image/")) {
+        setSourceImage(await fileToDataUrl(file));
+      } else {
+        setSourceText(await file.text());
+      }
+    } catch (caught: any) {
+      setError(caught.message || "File read nahi ho paayi.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const makeQuestions = () => {
+    setError("");
+    const parsed = parseQuestionsFromText(sourceText).length ? parseQuestionsFromText(sourceText) : parseQuestionsFromCSV(sourceText);
+    const generated = parsed.length ? parsed : sourceText.split(/\n\s*\n|\n/).map((part) => part.trim()).filter(Boolean).map((part) => ({
+      type: "SHORT_ANSWER", text: `Explain: ${part}`, options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: false
+    }));
+    if (!generated.length && !sourceImage) {
+      setError("Text paste karein ya image/PDF add karein.");
+      return;
+    }
+    setQuestions(generated.length ? generated : [{ type: "IMAGE_BASED", text: "Describe the attached image.", options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: true, imageDataUrl: sourceImage }]);
+  };
+
+  const saveQuestions = async () => {
+    if (!token || !user) {
+      setError("Questions save karne ke liye pehle login karein.");
+      return;
+    }
+    setBusy(true);
+    try {
+      for (const question of questions) {
+        const body = { ...question, imageDataUrl: undefined };
+        if (question.imageDataUrl) {
+          const upload = await api("/uploads", { method: "POST", token, body: { fileName: sourceName || "question-image.png", dataUrl: question.imageDataUrl } });
+          body.imageUrl = upload.url;
+        }
+        await api("/teacher/questions", { method: "POST", token, body });
+      }
+      notify(`${questions.length} questions Question Bank me save ho gaye.`);
+      setQuestions([]);
+      setSourceText("");
+      setSourceImage("");
+      setSourceName("");
+      onClose();
+    } catch (caught: any) {
+      setError(caught.message || "Questions save nahi ho paaye.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!isOpen) return null;
+  return <div className="modalOverlay" onClick={onClose}>
+    <section className="makeQuestionsBox" onClick={(event) => event.stopPropagation()}>
+      <div className="makeQuestionsHead"><div><span className="makeQuestionsIcon"><Sparkles size={19} /></span><div><h2>Make Questions</h2><p>Text, image ya PDF se local questions banaiye</p></div></div><button className="iconBtn" onClick={onClose} aria-label="Close Make Questions"><X size={17} /></button></div>
+      {!questions.length ? <>
+        <label className="field"><span>Source material paste karein</span><textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} onPaste={(event) => { const image = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/")); if (image) { const file = image.getAsFile(); if (file) void readSource(file); } }} placeholder="Notes, chapter text, ya Q1 format yahan paste karein..." /></label>
+        <div className="makeQuestionsUpload"><Upload size={17} /><span>{sourceName || "Image/PDF yahan choose karein"}</span><input type="file" accept="image/*,.pdf,text/plain,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readSource(file); }} /></div>
+        {sourceImage && <img className="makeQuestionsImage" src={sourceImage} alt="Attached source" />}
+        {error && <div className="formError">{error}</div>}
+        <div className="rowActions makeQuestionsActions"><button className="secondaryBtn" onClick={onClose}>Cancel</button><button className="primaryBtn" onClick={makeQuestions} disabled={busy}>{busy ? "Reading..." : "Create Preview"}</button></div>
+      </> : <>
+        <div className="makeQuestionsNotice"><CheckCircle2 size={17} /> {questions.length} question(s) ready. Text edit karke save karein.</div>
+        <div className="generatedQuestions">{questions.map((question, index) => <article key={index} className="generatedQuestion"><b>Q{index + 1}</b><textarea value={question.text} onChange={(event) => setQuestions((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item))} />{question.imageDataUrl && <img src={question.imageDataUrl} alt="Question source" />}</article>)}</div>
+        {error && <div className="formError">{error}</div>}
+        <div className="rowActions makeQuestionsActions"><button className="secondaryBtn" onClick={() => setQuestions([])} disabled={busy}>Back</button><button className="successBtn" onClick={saveQuestions} disabled={busy}>{busy ? "Saving..." : `Save ${questions.length} Questions`}</button></div>
+      </>}
+    </section>
+  </div>;
 }
 
 function Topbar({ user, logout }: { user: User | null; logout: () => void }) {
