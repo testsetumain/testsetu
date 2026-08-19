@@ -286,12 +286,14 @@ function MakeQuestionsModal({ isOpen, token, user, onClose, notify }: { isOpen: 
 
   const makeQuestions = () => {
     setError("");
-    const parsed = parseQuestionsFromText(sourceText).length ? parseQuestionsFromText(sourceText) : parseQuestionsFromCSV(sourceText);
-    const generated = parsed.length ? parsed : sourceText.split(/\n\s*\n|\n/).map((part) => part.trim()).filter(Boolean).map((part) => ({
+    const textQuestions = parseQuestionsFromText(sourceText);
+    const parsed = textQuestions.length ? textQuestions : parseQuestionsFromCSV(sourceText);
+    const looksStructured = /(^|\n)\s*(?:[-*]\s*)?(?:\*\*)?(?:q\s*\d+|\d+)[.)]|(^|\n)\s*[a-d][.)]/im.test(sourceText);
+    const generated = parsed.length ? parsed : looksStructured ? [] : sourceText.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).map((part) => ({
       type: "SHORT_ANSWER", text: `Explain: ${part}`, options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: false
     }));
     if (!generated.length && !sourceImage) {
-      setError("Text paste karein ya image/PDF add karein.");
+      setError(looksStructured ? "MCQ format check karein: question ke options a), b), c), d) ke saath ✅ ya Correct: a marker zaroor dein." : "Text paste karein ya image/PDF add karein.");
       return;
     }
     setQuestions(generated.length ? generated : [{ type: "IMAGE_BASED", text: "Describe the attached image.", options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: true, imageDataUrl: sourceImage }]);
@@ -1829,25 +1831,47 @@ function BulkImportModal({ isOpen, onClose, onImport, notify }: any) {
 
 function parseQuestionsFromText(text: string): any[] {
   const questions: any[] = [];
-  const blocks = text.split(/Q\d+\.\s*/i).filter(b => b.trim());
+  const lines = text.replace(/\r/g, "").split("\n");
+  const blocks: string[][] = [];
+  let current: string[] = [];
 
-  for (const block of blocks) {
-    const lines = block.trim().split('\n').filter(l => l.trim());
-    if (!lines.length) continue;
+  const isQuestionStart = (line: string) => {
+    const clean = line.trim();
+    return /^(?:[-*]\s*)?(?:\*\*)?(?:Q\s*\d+|\d+)[.)]\s*/i.test(clean) || /^(?:[-*]\s*)?\*\*.+\*\*\s*$/.test(clean);
+  };
 
-    const questionText = lines[0].trim();
+  for (const line of lines) {
+    if (isQuestionStart(line) && current.length) {
+      blocks.push(current);
+      current = [];
+    }
+    if (line.trim()) current.push(line);
+  }
+  if (current.length) blocks.push(current);
+
+  for (const blockLines of blocks) {
+    if (!blockLines.length) continue;
+
+    const firstLine = blockLines[0].trim();
+    const questionText = firstLine
+      .replace(/^(?:[-*]\s*)?(?:Q\s*\d+|\d+)[.)]\s*/i, "")
+      .replace(/^\*\*|\*\*$/g, "")
+      .trim();
     const options: string[] = [];
     let correctAnswer = '';
+    let markedCorrectIndex = -1;
     let marks = 1;
 
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      const optionMatch = line.match(/^[a-z]\)\s*(.+)/i);
+    for (let i = 1; i < blockLines.length; i++) {
+      const line = blockLines[i].trim();
+      const optionMatch = line.match(/^(?:[-*]\s*)?([a-d])[.)]\s*(.+)/i);
       if (optionMatch) {
-        options.push(optionMatch[1]);
+        const optionText = optionMatch[2].replace(/\s*(?:✅|✔️|✓)\s*$/u, '').trim();
+        if (/✅|✔️|✓/u.test(optionMatch[2])) markedCorrectIndex = options.length;
+        options.push(optionText);
         continue;
       }
-      const correctMatch = line.match(/^(?:correct|answer|correct\s+answer)\s*[:\-]?\s*([a-z]|\d+)/i);
+      const correctMatch = line.match(/^(?:[-*]\s*)?(?:correct|answer|correct\s+answer)\s*[:\-]?\s*([a-z]|\d+)/i);
       if (correctMatch) {
         correctAnswer = correctMatch[1];
         continue;
@@ -1858,8 +1882,8 @@ function parseQuestionsFromText(text: string): any[] {
       }
     }
 
-    if (questionText && options.length >= 2 && correctAnswer) {
-      const correctIndex = correctAnswer.toLowerCase().charCodeAt(0) - 97;
+    if (questionText && options.length >= 2 && (correctAnswer || markedCorrectIndex >= 0)) {
+      const correctIndex = markedCorrectIndex >= 0 ? markedCorrectIndex : (/^\d+$/.test(correctAnswer) ? Number(correctAnswer) - 1 : correctAnswer.toLowerCase().charCodeAt(0) - 97);
       questions.push({
         type: 'MCQ',
         text: questionText,
