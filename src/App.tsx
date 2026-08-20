@@ -1215,7 +1215,7 @@ function TestBuilder({ token, questions, onSaved, editingTest, onCancelEdit, stu
 
 function PublicTest({ slug, token, notify }: any) {
   const [test, setTest] = useState<Test | null>(null);
-  const [details, setDetails] = useState<any>({});
+  const [details, setDetails] = useState<any>({ language: "Bilingual" });
   const [attempt, setAttempt] = useState<any>(null);
   const [guestKey, setGuestKey] = useState("");
   const [step, setStep] = useState<"details" | "instructions" | "test" | "result">("details");
@@ -1309,7 +1309,7 @@ function PublicTest({ slug, token, notify }: any) {
       {step === "details" && (
         <section className="testCard">
           <h2>Student Details</h2>
-          <div className="formGrid">{test.studentFields.filter((f: any) => f.mode !== "hide").map((f: any) => <Field key={f.key} label={`${f.label}${f.mode === "required" ? " *" : ""}`} value={details[f.key] || ""} onChange={(v: string) => setDetails({ ...details, [f.key]: v })} />)}</div>
+          <div className="formGrid"><Select label="Exam language / परीक्षा की भाषा" value={details.language} onChange={(value: string) => setDetails({ ...details, language: value })} options={["Bilingual", "English", "Hindi"]} />{test.studentFields.filter((f: any) => f.mode !== "hide").map((f: any) => <Field key={f.key} label={`${f.label}${f.mode === "required" ? " *" : ""}`} value={details[f.key] || ""} onChange={(v: string) => setDetails({ ...details, [f.key]: v })} />)}</div>
           <button className="primaryBtn" onClick={() => { setError(""); setStep("instructions"); }}>Next</button>
         </section>
       )}
@@ -1326,7 +1326,7 @@ function PublicTest({ slug, token, notify }: any) {
       )}
       {step === "test" && (
         <section className="testRun">
-          <div className="questionPane">{test.questions.map((q: any, index: number) => <StudentQuestion key={q.id} q={q} index={index} value={answers[q.id]} onChange={(v: any) => saveAnswer(q.id, v)} />)}</div>
+          <div className="questionPane">{test.questions.map((q: any, index: number) => <StudentQuestion key={q.id} q={q} index={index} language={details.language} value={answers[q.id]} onChange={(v: any) => saveAnswer(q.id, v)} />)}</div>
           <aside className="palette">{test.questions.map((q: any, i: number) => <a className={answers[q.id] ? "answered" : ""} href={`#q-${q.id}`} key={q.id}>{i + 1}</a>)}<button className="dangerBtn" disabled={submitting} onClick={() => submit()}>{submitting ? "Submitting..." : "Submit"}</button></aside>
         </section>
       )}
@@ -1335,13 +1335,13 @@ function PublicTest({ slug, token, notify }: any) {
   );
 }
 
-function StudentQuestion({ q, index, value, onChange }: any) {
+function StudentQuestion({ q, index, language = "Bilingual", value, onChange }: any) {
   const singleChoiceTypes = ["MCQ", "TRUE_FALSE", "IMAGE_BASED", "PASSAGE_BASED", "ASSERTION_REASON"];
   const otherActive = value?.option === "__OTHER__";
   return (
     <article className="studentQuestion" id={`q-${q.id}`}>
       <div className="qTop"><span>Question {index + 1}</span><b>{q.marks} marks</b></div>
-      <h3>{q.text}</h3>
+      <h3>{localizedQuestionText(q.text, language)}</h3>
       {q.imageUrl && <img className="questionImage" src={assetUrl(q.imageUrl)} alt="" />}
       {singleChoiceTypes.includes(q.type) && <div className="optionStack">
         {q.options.map((op: string) => <label key={op} className={value === op ? "option active" : "option"}><input type="radio" checked={value === op} onChange={() => onChange(op)} />{op}</label>)}
@@ -1358,6 +1358,14 @@ function StudentQuestion({ q, index, value, onChange }: any) {
       <button className="secondaryBtn" onClick={() => onChange("")}>Clear answer</button>
     </article>
   );
+}
+
+function localizedQuestionText(text: string, language: string) {
+  const parts = String(text || "").split(/\n+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return text;
+  if (language === "English") return parts[0];
+  if (language === "Hindi") return parts[1];
+  return parts.slice(0, 2).join("\n");
 }
 
 function StudentDashboard({ token, notify }: any) {
