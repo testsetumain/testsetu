@@ -413,6 +413,10 @@ function Topbar({ user, logout }: { user: User | null; logout: () => void }) {
 }
 
 function createQuestionsFromDetails({ examName, subject, topic, questionType, difficulty, count, language, learnerLevel, board, details, round, blockedKeys = [] }: any): any[] {
+  const reasoningMode = /railway|reasoning|ssc|competitive/i.test(`${examName} ${subject} ${topic} ${learnerLevel} ${board}`);
+  if (reasoningMode && questionType === "MCQ") {
+    return createRailwayReasoningQuestions({ subject, topic, count, language, learnerLevel, board, difficulty, round, blockedKeys });
+  }
   const facts = String(details || "").split(/[\n.!?]+/).map((fact: string) => fact.replace(/^[-*\d.)\s]+/, "").trim()).filter(Boolean);
   const focus = facts.length ? facts : [`the core idea of ${topic}`, `an important example from ${topic}`, `the practical use of ${topic}`, `the key terms used in ${topic}`];
   const stems = [
@@ -489,6 +493,95 @@ function createQuestionsFromDetails({ examName, subject, topic, questionType, di
       question.correct = ["True"];
     }
     questions.push(question);
+    attempt += 1;
+  }
+  return questions;
+}
+
+function createRailwayReasoningQuestions({ subject, topic, count, language, learnerLevel, board, difficulty, round, blockedKeys = [] }: any): any[] {
+  const bilingual = (english: string, hindi: string) => language === "English" ? english : language === "Hindi" ? hindi : `${english}\n${hindi}`;
+  const templates = [
+    (index: number) => {
+      const start = 3 + ((index * 2 + round) % 8);
+      const terms = [start, start * 2 + 1, start * 4 + 3, start * 8 + 7, start * 16 + 15];
+      const answer = start * 32 + 31;
+      return {
+        label: "Series / श्रृंखला",
+        text: bilingual(`Find the next number in the series: ${terms.join(", ")}, ?`, `दी गई संख्या श्रृंखला में अगला पद ज्ञात कीजिए: ${terms.join(", ")}, ?`),
+        options: [answer, answer - 2, answer + 2, answer + 4].map(String),
+        correct: String(answer),
+        explanation: bilingual("The rule is (× 2 + 1).", "नियम (× 2 + 1) का है।")
+      };
+    },
+    (index: number) => {
+      const words = [["PEN", "QFO", "BOX", "CPY"], ["CAT", "DBU", "DOG", "EPH"], ["MAP", "NBQ", "SUN", "TVO"]];
+      const [source, coded, target, answer] = words[(index + round) % words.length];
+      return {
+        label: "Coding-Decoding / कोडिंग-डिकोडिंग",
+        text: bilingual(`If '${source}' is written as '${coded}', how will '${target}' be written?`, `यदि '${source}' को '${coded}' लिखा जाता है, तो '${target}' को कैसे लिखा जाएगा?`),
+        options: [answer, answer.split("").reverse().join(""), `${answer[0]}QY`, `${answer[0]}RZ`],
+        correct: answer,
+        explanation: bilingual("Each letter is shifted one position forward in the alphabet.", "प्रत्येक अक्षर को वर्णमाला में एक स्थान आगे किया गया है।")
+      };
+    },
+    (index: number) => {
+      const variants = [
+        ["A is the brother of B. C is the mother of A. D is the father of C. How is D related to A?", "A, B का भाई है। C, A की माँ है। D, C का पिता है। D का A से क्या संबंध है?", "Maternal grandfather / नाना"],
+        ["P is the sister of Q. R is the father of P. How is R related to Q?", "P, Q की बहन है। R, P के पिता हैं। R का Q से क्या संबंध है?", "Father / पिता"],
+        ["M is the son of N. O is the mother of N. How is O related to M?", "M, N का पुत्र है। O, N की माँ हैं। O का M से क्या संबंध है?", "Grandmother / दादी या नानी"]
+      ];
+      const [english, hindi, answer] = variants[(index + round) % variants.length];
+      return {
+        label: "Blood Relation / रक्त संबंध",
+        text: bilingual(english, hindi),
+        options: [answer, "Uncle / चाचा", "Sister / बहन", "Cousin / चचेरा भाई"],
+        correct: answer,
+        explanation: bilingual("Trace the stated family relationships step by step.", "दिए गए पारिवारिक संबंधों को क्रम से जोड़कर उत्तर प्राप्त करें।")
+      };
+    },
+    (index: number) => {
+      const distance = 3 + ((index + round) % 5);
+      return {
+        label: "Direction Test / दिशा परीक्षण",
+        text: bilingual(`Ravi walks ${distance} km north and then turns right and walks ${distance + 2} km. In which direction is he from the starting point?`, `रवि ${distance} किमी उत्तर की ओर चलता है और फिर दाएँ मुड़कर ${distance + 2} किमी चलता है। वह प्रारंभिक बिंदु से किस दिशा में है?`),
+        options: ["North-East / उत्तर-पूर्व", "North-West / उत्तर-पश्चिम", "South-East / दक्षिण-पूर्व", "South-West / दक्षिण-पश्चिम"],
+        correct: "North-East / उत्तर-पूर्व",
+        explanation: bilingual("North followed by a right turn leads east, so the final direction is north-east.", "उत्तर दिशा के बाद दाएँ मुड़ने पर पूर्व दिशा आती है, इसलिए दिशा उत्तर-पूर्व होगी।")
+      };
+    },
+    (index: number) => {
+      const values = [["Book", "Read", "Food", "Eat", "Sleep"], ["Bird", "Fly", "Fish", "Swim", "Stone"], ["Pen", "Write", "Knife", "Cut", "Chair"]];
+      const [a, relation, b, relation2, odd] = values[(index + round) % values.length];
+      return {
+        label: "Analogy / समानता",
+        text: bilingual(`${a} is related to ${relation} in the same way as ${b} is related to ?`, `${a} का संबंध ${relation} से है, उसी प्रकार ${b} का संबंध किससे है?`),
+        options: [relation2, odd, "Walk", "Look"],
+        correct: relation2,
+        explanation: bilingual(`${a} represents an action associated with it; ${b} follows the same relation.`, `${a} से संबंधित क्रिया के आधार पर ${b} का सही संबंध चुना जाता है।`)
+      };
+    },
+    (index: number) => {
+      const sets = [["2, 4, 8", "16"], ["5, 10, 20", "40"], ["7, 14, 28", "56"]];
+      const [series, answer] = sets[(index + round) % sets.length];
+      return {
+        label: "Number Pattern / संख्या पैटर्न",
+        text: bilingual(`Complete the pattern: ${series}, ?`, `संख्या पैटर्न पूरा कीजिए: ${series}, ?`),
+        options: [answer, String(Number(answer) + 4), String(Number(answer) - 2), String(Number(answer) + 8)],
+        correct: answer,
+        explanation: bilingual("Each term is multiplied by 2.", "प्रत्येक पद को 2 से गुणा किया गया है।")
+      };
+    }
+  ];
+  const questions: any[] = [];
+  const used = new Set(blockedKeys);
+  let attempt = 0;
+  while (questions.length < count && attempt < count * 20) {
+    const draft = templates[attempt % templates.length](attempt);
+    const key = draft.text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!used.has(key)) {
+      used.add(key);
+      questions.push({ type: "MCQ", text: draft.text, options: draft.options, correct: [draft.correct], marks: 1, negativeMarks: 0, subject: subject || "Reasoning", topic: draft.label, chapter: topic || "Reasoning", difficulty, learnerLevel, board, language, explanation: draft.explanation, allowOther: false, generationKey: key });
+    }
     attempt += 1;
   }
   return questions;
