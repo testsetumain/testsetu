@@ -118,7 +118,7 @@ export default function App() {
 type ChatMessage = { id: number; role: "assistant" | "user"; text: string };
 
 function LocalChatbot({ user, token, notify }: { user: User | null; token: string; notify: (message: string) => void }) {
-  const storageKey = "testsetu_local_chat";
+  const storageKey = "testsetu_local_chat_v2";
   const positionKey = "testsetu_setu_ai_position";
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -137,9 +137,9 @@ function LocalChatbot({ user, token, notify }: { user: User | null; token: strin
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
-      return Array.isArray(saved) && saved.length ? saved : [{ id: Date.now(), role: "assistant", text: "Namaste! Main Setu AI hoon, TestSetu ka personal assistant. Bulk questions import, Studio, Question Bank ya website ke kisi bhi feature ke baare me poochhiye." }];
+      return Array.isArray(saved) && saved.length ? saved : [{ id: Date.now(), role: "assistant", text: "Namaste! Main Setu AI hoon. Main aapki madad ke liye yahan hoon." }];
     } catch {
-      return [{ id: Date.now(), role: "assistant", text: "Namaste! Main Setu AI hoon, TestSetu ka personal assistant. Aap bulk questions, Studio ya Question Bank ke baare me poochh sakte hain." }];
+      return [{ id: Date.now(), role: "assistant", text: "Namaste! Main Setu AI hoon. Main aapki madad ke liye yahan hoon." }];
     }
   });
 
@@ -197,16 +197,16 @@ function LocalChatbot({ user, token, notify }: { user: User | null; token: strin
       return "Questions tab kholkar Question Bank section me jaiye. Wahan Bulk Import button search ke paas milega.";
     }
     if (/(hello|hi|hii|namaste|hey|help|madad)/.test(text)) {
-      return `Namaste${user?.name ? ` ${user.name}` : ""}! Main bina kisi external API ke kaam karta hoon. Aap mujhse bulk import, CSV format, Studio, Question Bank, test creation ya website navigation ke baare me pooch sakte hain.`;
+      return `Namaste${user?.name ? ` ${user.name}` : ""}! Main Setu AI hoon. Aap apna sawal likhiye.`;
     }
     if (/(api|internet|offline|local)/.test(text)) {
-      return "Main completely local hoon: mere answers browser ke rules aur saved chat history se aate hain. Kisi chatbot API, AI API ya external service ki zarurat nahi hai.";
+      return "Main aapki madad ke liye yahan hoon. Apna sawal likhiye.";
     }
     if (/(clear|delete|reset).*(chat|conversation|history)/.test(text)) {
       setMessages([{ id: Date.now(), role: "assistant", text: "Chat history clear ho gayi. Setu AI yahin hai, TestSetu ke features me madad ke liye." }]);
       return "";
     }
-    return "Main TestSetu ke question workflow par focused hoon. Aap pooch sakte hain: 'bulk import kaise karein?', 'CSV format batao', 'Studio me question kaise add karein?' ya 'API ki zarurat hai?'";
+    return "Setu AI aapki madad ke liye yahan hai. Apna sawal dobara likhiye.";
   };
 
   const send = (value = input) => {
@@ -237,7 +237,7 @@ function LocalChatbot({ user, token, notify }: { user: User | null; token: strin
           </div>
           <div className="chatSuggestions">
             <button onClick={() => setShowMakeQuestions(true)}><Sparkles size={13} /> Make Questions</button>
-            {["Bulk import kaise karein?", "CSV format batao", "API ki zarurat hai?"].map((suggestion) => <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>)}
+            {["Bulk import kaise karein?", "CSV format batao"].map((suggestion) => <button key={suggestion} onClick={() => send(suggestion)}>{suggestion}</button>)}
           </div>
           <form className="chatComposer" onSubmit={(event) => { event.preventDefault(); send(); }}>
             <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Apna sawal likhiye..." aria-label="Chat message" />
