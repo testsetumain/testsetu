@@ -338,6 +338,17 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
     }
     setBusy(true);
     try {
+      const activeTab = document.querySelector<HTMLButtonElement>(".tabs button.active")?.textContent?.toLowerCase() || "";
+      if (activeTab.includes("studio")) {
+        window.dispatchEvent(new CustomEvent("testsetu:assistant-questions", { detail: { questions } }));
+        notify(`${questions.length} questions This Paper's Questions me add ho gaye.`);
+        setQuestions([]);
+        setSourceText("");
+        setSourceImage("");
+        setSourceName("");
+        onClose();
+        return;
+      }
       for (const question of questions) {
         const body = { ...question, imageDataUrl: undefined };
         if (question.imageDataUrl) {
@@ -989,6 +1000,15 @@ function ExamStudio({ token, onRefresh, notify }: any) {
     notify(`${questions.length} questions added to this paper.`);
     setShowBulkImport(false);
   };
+
+  useEffect(() => {
+    const receiveAssistantQuestions = (event: Event) => {
+      const questions = (event as CustomEvent<{ questions?: any[] }>).detail?.questions || [];
+      questions.forEach(addPaperQuestion);
+    };
+    window.addEventListener("testsetu:assistant-questions", receiveAssistantQuestions);
+    return () => window.removeEventListener("testsetu:assistant-questions", receiveAssistantQuestions);
+  }, []);
 
   return (
     <div className="studioGrid">
