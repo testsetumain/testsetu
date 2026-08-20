@@ -258,6 +258,9 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
   const [sourceImage, setSourceImage] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [questions, setQuestions] = useState<any[]>([]);
+  const [generator, setGenerator] = useState({ examName: "", subject: "", topic: "", questionType: "MCQ", difficulty: "Medium", count: 10, details: "" });
+  const [generationRound, setGenerationRound] = useState(0);
+  const [usedGeneratedKeys, setUsedGeneratedKeys] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -311,6 +314,23 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
     setQuestions(generated.length ? generated : [{ type: "IMAGE_BASED", text: "Describe the attached image.", options: [], correct: [], marks: 1, negativeMarks: 0, subject: "", topic: "", explanation: "", difficulty: "Medium", allowOther: true, imageDataUrl: sourceImage }]);
   };
 
+  const generateFromDetails = () => {
+    setError("");
+    if (!generator.subject.trim() || !generator.topic.trim()) {
+      setError("Subject aur topic dono bharna zaroori hai.");
+      return;
+    }
+    const count = Math.max(1, Math.min(100, Number(generator.count) || 1));
+    const generated = createQuestionsFromDetails({ ...generator, count, round: generationRound, blockedKeys: usedGeneratedKeys });
+    if (!generated.length) {
+      setError("Is topic ke liye naye question variations khatam ho gaye. Topic ya details badal kar phir generate karein.");
+      return;
+    }
+    setGenerationRound((round) => round + 1);
+    setUsedGeneratedKeys((keys) => [...keys, ...generated.map((question) => question.generationKey)]);
+    setQuestions(generated);
+  };
+
   const saveQuestions = async () => {
     if (!token || !user) {
       setError("Questions save karne ke liye pehle login karein.");
@@ -344,6 +364,20 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
     <section className="makeQuestionsBox" onClick={(event) => event.stopPropagation()}>
       <div className="makeQuestionsHead"><div><span className="makeQuestionsIcon"><Sparkles size={19} /></span><div><h2>Make Questions</h2><p>Text, image ya PDF se local questions banaiye</p></div></div><button className="iconBtn" onClick={onClose} aria-label="Close Make Questions"><X size={17} /></button></div>
       {!questions.length ? <>
+        <div className="questionGenerator">
+          <div className="questionGeneratorHead"><div><Bot size={18} /><b>Generate from details</b></div><span>Local generator</span></div>
+          <div className="generatorGrid">
+            <Field label="Exam name" value={generator.examName} onChange={(value: string) => setGenerator({ ...generator, examName: value })} />
+            <Field label="Subject" value={generator.subject} onChange={(value: string) => setGenerator({ ...generator, subject: value })} />
+            <Field label="Topic / chapter" value={generator.topic} onChange={(value: string) => setGenerator({ ...generator, topic: value })} />
+            <Select label="Question type" value={generator.questionType} onChange={(value: string) => setGenerator({ ...generator, questionType: value })} options={["MCQ", "TRUE_FALSE", "SHORT_ANSWER", "LONG_ANSWER"]} />
+            <Select label="Difficulty" value={generator.difficulty} onChange={(value: string) => setGenerator({ ...generator, difficulty: value })} options={["Easy", "Medium", "Hard"]} />
+            <Field label="How many? (1-100)" type="number" value={generator.count} onChange={(value: string) => setGenerator({ ...generator, count: Math.max(1, Math.min(100, Number(value) || 1)) })} />
+          </div>
+          <TextArea label="Important details / learning points (optional)" value={generator.details} onChange={(value: string) => setGenerator({ ...generator, details: value })} />
+          <button className="primaryBtn" onClick={generateFromDetails} disabled={busy}><Sparkles size={16} /> Generate Questions</button>
+        </div>
+        <div className="makeQuestionsDivider"><span>Or paste / upload source material</span></div>
         <label className="field"><span>Source material paste karein</span><textarea value={sourceText} onChange={(event) => setSourceText(event.target.value)} onPaste={(event) => { const image = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/")); if (image) { const file = image.getAsFile(); if (file) void readSource(file); } }} placeholder="Notes, chapter text, ya Q1 format yahan paste karein..." /></label>
         <div className="makeQuestionsUpload"><Upload size={17} /><span>{sourceName || "Image/PDF yahan choose karein"}</span><input type="file" accept="image/*,.pdf,text/plain,.csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readSource(file); }} /></div>
         {sourceImage && <img className="makeQuestionsImage" src={sourceImage} alt="Attached source" />}
@@ -373,6 +407,77 @@ function Topbar({ user, logout }: { user: User | null; logout: () => void }) {
       </nav>
     </header>
   );
+}
+
+function createQuestionsFromDetails({ examName, subject, topic, questionType, difficulty, count, details, round, blockedKeys = [] }: any): any[] {
+  const facts = String(details || "").split(/[\n.!?]+/).map((fact: string) => fact.replace(/^[-*\d.)\s]+/, "").trim()).filter(Boolean);
+  const focus = facts.length ? facts : [`the core idea of ${topic}`, `an important example from ${topic}`, `the practical use of ${topic}`, `the key terms used in ${topic}`];
+  const stems = [
+    "What is the main idea of",
+    "Which statement best explains",
+    "What should a learner identify about",
+    "Which point is most important when studying",
+    "How would you describe",
+    "Which concept is directly related to",
+    "What is a key feature of",
+    "Which observation is correct about",
+    "What should be remembered about",
+    "Which example represents",
+    "What is the practical significance of",
+    "Which statement would help revise"
+  ];
+  const angles = ["definition", "cause and effect", "application", "comparison", "importance", "example"];
+  const questions: any[] = [];
+  const seen = new Set<string>();
+  const blocked = new Set(blockedKeys);
+  let attempt = 0;
+  while (questions.length < count && attempt < count * 20) {
+    const index = attempt + round * count;
+    const fact = focus[index % focus.length];
+    const stem = stems[index % stems.length];
+    const angle = angles[Math.floor(index / (stems.length * focus.length)) % angles.length];
+    const baseText = `${stem} ${topic} from the ${angle} perspective?`;
+    const text = questionType === "TRUE_FALSE"
+      ? `True or False: ${fact}.`
+      : questionType === "LONG_ANSWER"
+        ? `Discuss ${topic} with reference to ${fact}.`
+        : questionType === "SHORT_ANSWER"
+          ? `Explain ${topic} in relation to ${fact}.`
+          : baseText;
+    const key = text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (seen.has(key) || blocked.has(key)) {
+      attempt += 1;
+      continue;
+    }
+    seen.add(key);
+    const question: any = {
+      type: questionType,
+      text,
+      options: [],
+      correct: [],
+      marks: questionType === "LONG_ANSWER" ? 5 : questionType === "SHORT_ANSWER" ? 2 : 1,
+      negativeMarks: 0,
+      subject,
+      topic,
+      chapter: topic,
+      examName,
+      explanation: "",
+      difficulty,
+      allowOther: false,
+      generationKey: key
+    };
+    if (questionType === "MCQ") {
+      const distractors = focus.filter((candidate) => candidate !== fact).slice(0, 3);
+      question.options = [fact, ...distractors, "None of the above"].slice(0, 4);
+      question.correct = [fact];
+    } else if (questionType === "TRUE_FALSE") {
+      question.options = ["True", "False"];
+      question.correct = ["True"];
+    }
+    questions.push(question);
+    attempt += 1;
+  }
+  return questions;
 }
 
 function SetupCard({ setup, onDone, notify }: any) {

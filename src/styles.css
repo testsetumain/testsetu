@@ -372,6 +372,14 @@ th { background: #f8fafc; color: #475569; text-transform: capitalize; }
 .makeQuestionsUpload { position: relative; display: flex; align-items: center; gap: 9px; min-height: 48px; margin: 12px 0; padding: 10px 12px; overflow: hidden; border: 1px dashed var(--secondary); border-radius: 9px; color: var(--secondary); background: var(--sky); font-weight: 800; }
 .makeQuestionsUpload input { position: absolute; inset: 0; min-height: 0; opacity: 0; cursor: pointer; }
 .makeQuestionsImage, .generatedQuestion img { width: 100%; max-height: 220px; object-fit: contain; margin: 4px 0 12px; border: 1px solid var(--line); border-radius: 9px; background: #f8fafc; }
+.questionGenerator { display: grid; gap: 11px; padding: 14px; margin-bottom: 14px; border: 1px solid #c7d2fe; border-radius: 10px; background: linear-gradient(145deg, #f8faff, #f0fdfa); }
+.questionGeneratorHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--primary); }
+.questionGeneratorHead > div { display: flex; align-items: center; gap: 8px; }
+.questionGeneratorHead > span { color: var(--success); font-size: .76rem; font-weight: 850; }
+.generatorGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.questionGenerator .primaryBtn { justify-self: start; }
+.makeQuestionsDivider { display: flex; align-items: center; gap: 10px; margin: 14px 0; color: var(--muted); font-size: .8rem; font-weight: 800; }
+.makeQuestionsDivider::before, .makeQuestionsDivider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 .makeQuestionsNotice { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid #bbf7d0; border-radius: 8px; color: var(--success); background: var(--mint); font-weight: 850; }
 .generatedQuestions { display: grid; gap: 10px; max-height: 430px; overflow-y: auto; }
 .generatedQuestion { display: grid; grid-template-columns: 30px 1fr; gap: 8px; align-items: start; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #fbfdff; }
@@ -416,4 +424,5 @@ th { background: #f8fafc; color: #475569; text-transform: capitalize; }
   .section, .authPanel, .testCard { padding: 14px; }
   .localChatbot { right: 14px; bottom: 14px; }
   .chatPanel { height: min(560px, calc(100vh - 92px)); }
+  .generatorGrid { grid-template-columns: 1fr; }
 }
