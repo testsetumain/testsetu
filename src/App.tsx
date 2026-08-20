@@ -258,7 +258,7 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
   const [sourceImage, setSourceImage] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [questions, setQuestions] = useState<any[]>([]);
-  const [generator, setGenerator] = useState({ examName: "", subject: "", topic: "", questionType: "MCQ", difficulty: "Medium", count: 10, details: "" });
+  const [generator, setGenerator] = useState({ examName: "", subject: "", topic: "", questionType: "MCQ", difficulty: "Medium", count: 10, language: "Bilingual", learnerLevel: "Class 10", board: "CBSE", details: "" });
   const [generationRound, setGenerationRound] = useState(0);
   const [usedGeneratedKeys, setUsedGeneratedKeys] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -371,6 +371,9 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
             <Field label="Subject" value={generator.subject} onChange={(value: string) => setGenerator({ ...generator, subject: value })} />
             <Field label="Topic / chapter" value={generator.topic} onChange={(value: string) => setGenerator({ ...generator, topic: value })} />
             <Select label="Question type" value={generator.questionType} onChange={(value: string) => setGenerator({ ...generator, questionType: value })} options={["MCQ", "TRUE_FALSE", "SHORT_ANSWER", "LONG_ANSWER"]} />
+            <Select label="Language" value={generator.language} onChange={(value: string) => setGenerator({ ...generator, language: value })} options={["Bilingual", "English", "Hindi"]} />
+            <Select label="Student level" value={generator.learnerLevel} onChange={(value: string) => setGenerator({ ...generator, learnerLevel: value })} options={["Class 6", "Class 7", "Class 8", "Class 9", "Class 10", "Class 11", "Class 12", "10th Competitive", "12th Competitive", "SSC", "Railway", "Other Competitive"]} />
+            <Select label="Board / exam system" value={generator.board} onChange={(value: string) => setGenerator({ ...generator, board: value })} options={["CBSE", "UP Board", "ICSE", "State Board", "SSC", "Railway", "Competitive", "Other"]} />
             <Select label="Difficulty" value={generator.difficulty} onChange={(value: string) => setGenerator({ ...generator, difficulty: value })} options={["Easy", "Medium", "Hard"]} />
             <Field label="How many? (1-100)" type="number" value={generator.count} onChange={(value: string) => setGenerator({ ...generator, count: Math.max(1, Math.min(100, Number(value) || 1)) })} />
           </div>
@@ -384,7 +387,7 @@ function MakeQuestionsModal({ isOpen, initialText, token, user, onClose, notify 
         {error && <div className="formError">{error}</div>}
         <div className="rowActions makeQuestionsActions"><button className="secondaryBtn" onClick={onClose}>Cancel</button><button className="primaryBtn" onClick={makeQuestions} disabled={busy}>{busy ? "Reading..." : "Create Preview"}</button></div>
       </> : <>
-        <div className="makeQuestionsNotice"><CheckCircle2 size={17} /> {questions.length} question(s) ready. Text edit karke save karein.</div>
+        <div className="makeQuestionsNotice"><CheckCircle2 size={17} /> {questions.length} question(s) ready for {generator.learnerLevel} / {generator.board}. Text edit karke save karein.</div>
         <div className="generatedQuestions">{questions.map((question, index) => <article key={index} className="generatedQuestion"><b>Q{index + 1}</b><textarea value={question.text} onChange={(event) => setQuestions((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item))} />{question.imageDataUrl && <img src={question.imageDataUrl} alt="Question source" />}</article>)}</div>
         {error && <div className="formError">{error}</div>}
         <div className="rowActions makeQuestionsActions"><button className="secondaryBtn" onClick={() => setQuestions([])} disabled={busy}>Back</button><button className="successBtn" onClick={saveQuestions} disabled={busy}>{busy ? "Saving..." : `Save ${questions.length} Questions`}</button></div>
@@ -409,7 +412,7 @@ function Topbar({ user, logout }: { user: User | null; logout: () => void }) {
   );
 }
 
-function createQuestionsFromDetails({ examName, subject, topic, questionType, difficulty, count, details, round, blockedKeys = [] }: any): any[] {
+function createQuestionsFromDetails({ examName, subject, topic, questionType, difficulty, count, language, learnerLevel, board, details, round, blockedKeys = [] }: any): any[] {
   const facts = String(details || "").split(/[\n.!?]+/).map((fact: string) => fact.replace(/^[-*\d.)\s]+/, "").trim()).filter(Boolean);
   const focus = facts.length ? facts : [`the core idea of ${topic}`, `an important example from ${topic}`, `the practical use of ${topic}`, `the key terms used in ${topic}`];
   const stems = [
@@ -437,13 +440,21 @@ function createQuestionsFromDetails({ examName, subject, topic, questionType, di
     const stem = stems[index % stems.length];
     const angle = angles[Math.floor(index / (stems.length * focus.length)) % angles.length];
     const baseText = `${stem} ${topic} from the ${angle} perspective?`;
-    const text = questionType === "TRUE_FALSE"
+    const englishText = questionType === "TRUE_FALSE"
       ? `True or False: ${fact}.`
       : questionType === "LONG_ANSWER"
         ? `Discuss ${topic} with reference to ${fact}.`
         : questionType === "SHORT_ANSWER"
           ? `Explain ${topic} in relation to ${fact}.`
           : baseText;
+    const hindiText = questionType === "TRUE_FALSE"
+      ? `सही या गलत: ${fact}।`
+      : questionType === "LONG_ANSWER"
+        ? `${fact} के संदर्भ में ${topic} की चर्चा कीजिए।`
+        : questionType === "SHORT_ANSWER"
+          ? `${fact} के संबंध में ${topic} को समझाइए।`
+          : `${topic} के ${angle} से संबंधित मुख्य बात क्या है?`;
+    const text = language === "English" ? englishText : language === "Hindi" ? hindiText : `${englishText}\n${hindiText}`;
     const key = text.toLowerCase().replace(/\s+/g, " ").trim();
     if (seen.has(key) || blocked.has(key)) {
       attempt += 1;
@@ -463,6 +474,9 @@ function createQuestionsFromDetails({ examName, subject, topic, questionType, di
       examName,
       explanation: "",
       difficulty,
+      learnerLevel,
+      board,
+      language,
       allowOther: false,
       generationKey: key
     };
